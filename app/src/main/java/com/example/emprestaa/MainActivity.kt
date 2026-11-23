@@ -60,6 +60,11 @@ import com.example.emprestaa.data.EquipmentViewModel
 import com.example.emprestaa.data.DefectViewModel
 import com.example.emprestaa.data.DefeitoInsert
 import com.example.emprestaa.data.LoanViewModel
+import com.example.emprestaa.data.SupabaseProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -75,12 +80,18 @@ data class Problema(val id: String, val codigo: String, val descricao: String, v
 @Serializable
 data class BancoLocal(val equipamentos: List<Equipamento>, val emprestimos: List<Emprestimo>, val problemas: List<Problema>)
 
+private fun formatarData(iso: String): String = runCatching {
+    java.time.OffsetDateTime.parse(iso).atZoneSameInstant(java.time.ZoneId.systemDefault())
+        .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))
+}.getOrElse { iso.replace('T', ' ').take(16) }
+
 private fun agora(): String = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("pt", "BR")).format(Date())
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        SupabaseProvider.init(applicationContext)
         setContent { EmprestaAppRoot() }
     }
 }
@@ -93,6 +104,15 @@ private fun EmprestaAppRoot(authViewModel: AuthViewModel = viewModel()) {
     var nomeProfessor by remember { mutableStateOf(prefs.getString("nome_professor", "") ?: "") }
     var demonstracaoAtiva by remember { mutableStateOf(prefs.getString("supabase_user_id", null) != null) }
     val dark = modo == "Escuro" || (modo == "Aparelho" && isSystemInDarkTheme())
+    // Se o Supabase perder a sessão (ex.: token recusado), volta ao login em vez de mostrar dados vazios.
+    val sessaoPerdida by authViewModel.sessaoPerdida.collectAsState()
+    LaunchedEffect(sessaoPerdida, demonstracaoAtiva) {
+        if (sessaoPerdida && demonstracaoAtiva) {
+            prefs.edit().remove("supabase_user_id").remove("nome_professor").apply()
+            nomeProfessor = ""
+            demonstracaoAtiva = false
+        }
+    }
     EmprestaAêTheme(darkTheme = dark) {
         if (demonstracaoAtiva) {
             EmprestaApp(
@@ -123,7 +143,7 @@ private fun TelaLogin(authViewModel: AuthViewModel, onContinuarDemonstracao: (co
     var erroUsuario by remember { mutableStateOf(false) }
     var erroSenha by remember { mutableStateOf(false) }
     var mostrarSenha by remember { mutableStateOf(false) }
-    var erroAcesso by remember { mutableStateOf(false) }
+    var mensagemLogin by remember { mutableStateOf<String?>(null) }
     var mostrarRecuperacao by remember { mutableStateOf(false) }
     var mostrarAvisoDemo by remember { mutableStateOf(false) }
     val senhaFocus = remember { FocusRequester() }
@@ -131,12 +151,20 @@ private fun TelaLogin(authViewModel: AuthViewModel, onContinuarDemonstracao: (co
     val contexto = LocalContext.current
     val authState by authViewModel.state.collectAsState()
     var recuperacaoEnviada by remember { mutableStateOf(false) }
+    // Um só caminho para o botão "Entrar" e para o "OK" do teclado.
+    fun tentarEntrar() {
+        erroUsuario = usuario.isBlank(); erroSenha = senha.isBlank(); mensagemLogin = null
+        if (erroUsuario || erroSenha) return
+        if (!usuario.contains("@")) { mensagemLogin = "Digite o e-mail completo, com @ e domínio."; return }
+        focusManager.clearFocus()
+        authViewModel.login(usuario, senha)
+    }
     LaunchedEffect(authState) {
         when (val state = authState) {
             is AuthState.SignedIn -> onContinuarDemonstracao(state.user)
             is AuthState.Error -> {
                 if (mostrarRecuperacao && state.message.startsWith("Se o e-mail")) recuperacaoEnviada = true
-                else erroAcesso = true
+                else mensagemLogin = state.message
             }
             else -> Unit
         }
@@ -164,33 +192,25 @@ private fun TelaLogin(authViewModel: AuthViewModel, onContinuarDemonstracao: (co
                             Text("Informe os dados fornecidos pela sua escola.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         OutlinedTextField(
-                            value = usuario, onValueChange = { usuario = it; erroUsuario = false; erroAcesso = false },
-                            modifier = Modifier.fillMaxWidth(), label = { Text("Usuário ou e-mail") }, placeholder = { Text("Seu usuário escolar") },
+                            value = usuario, onValueChange = { usuario = it; erroUsuario = false; mensagemLogin = null },
+                            modifier = Modifier.fillMaxWidth(), label = { Text("E-mail") }, placeholder = { Text("nome@escola.com") },
                             leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) }, singleLine = true,
-                            isError = erroUsuario, supportingText = { if (erroUsuario) Text("Informe seu usuário ou e-mail.") },
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next), keyboardActions = KeyboardActions(onNext = { senhaFocus.requestFocus() })
+                            isError = erroUsuario, supportingText = { if (erroUsuario) Text("Informe seu e-mail.") },
+                            keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email, imeAction = ImeAction.Next), keyboardActions = KeyboardActions(onNext = { senhaFocus.requestFocus() })
                         )
                         OutlinedTextField(
-                            value = senha, onValueChange = { senha = it; erroSenha = false; erroAcesso = false },
+                            value = senha, onValueChange = { senha = it; erroSenha = false; mensagemLogin = null },
                             modifier = Modifier.fillMaxWidth().focusRequester(senhaFocus), label = { Text("Senha") },
                             leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) }, singleLine = true,
                             visualTransformation = if (mostrarSenha) VisualTransformation.None else PasswordVisualTransformation(),
                             trailingIcon = { IconButton(onClick = { mostrarSenha = !mostrarSenha }, modifier = Modifier.size(48.dp)) { Icon(if (mostrarSenha) Icons.Default.VisibilityOff else Icons.Default.Visibility, contentDescription = if (mostrarSenha) "Ocultar senha" else "Mostrar senha") } },
                             isError = erroSenha, supportingText = { if (erroSenha) Text("Informe sua senha.") },
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
-                            keyboardActions = KeyboardActions(onDone = {
-                                erroUsuario = usuario.isBlank(); erroSenha = senha.isBlank()
-                                if (!erroUsuario && !erroSenha) { focusManager.clearFocus(); authViewModel.login(usuario, senha) }
-                            })
+                            keyboardActions = KeyboardActions(onDone = { tentarEntrar() })
                         )
                         TextButton(onClick = { mostrarRecuperacao = true }, modifier = Modifier.align(Alignment.End)) { Text("Esqueci minha senha") }
-                        if (erroAcesso) {
-                            Text((authState as? AuthState.Error)?.message ?: "Não foi possível entrar.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Button(onClick = {
-                            erroUsuario = usuario.isBlank(); erroSenha = senha.isBlank(); erroAcesso = false
-                            if (!erroUsuario && !erroSenha && usuario.contains("@")) { focusManager.clearFocus(); authViewModel.login(usuario, senha) } else if (!erroUsuario) erroAcesso = true
-                        }, enabled = authState !is AuthState.Loading, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { if (authState is AuthState.Loading) CircularProgressIndicator(Modifier.size(22.dp)) else Text("Entrar") }
+                        mensagemLogin?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                        Button(onClick = { tentarEntrar() }, enabled = authState !is AuthState.Loading, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { if (authState is AuthState.Loading) CircularProgressIndicator(Modifier.size(22.dp)) else Text("Entrar") }
                     }
                 }
                 Text("Ainda não tem acesso? Solicite suas credenciais à administração da escola.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -214,11 +234,27 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
     val defectState by defectViewModel.state.collectAsState()
     val loanViewModel: LoanViewModel = viewModel(key = "emprestimos-$userId")
     val loanState by loanViewModel.state.collectAsState()
-    LaunchedEffect(userId) { equipmentViewModel.carregar(); defectViewModel.carregar() }
-    LaunchedEffect(userId) { if (userId.isNotBlank()) loanViewModel.carregar(userId) }
-    LaunchedEffect(loanState) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    // Atualiza sozinho enquanto o app está aberto: quando outro professor pega ou devolve um equipamento, a tela acompanha.
+    LaunchedEffect(userId) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            var primeira = true
+            while (true) {
+                equipmentViewModel.carregar(silencioso = !primeira)
+                defectViewModel.carregar(silencioso = !primeira)
+                if (userId.isNotBlank()) loanViewModel.carregar(userId, silencioso = !primeira)
+                primeira = false
+                delay(10_000)
+            }
+        }
+    }
+    LaunchedEffect(loanState.rows, loanState.loading, loanState.error, equipamentosState.items) {
         if (!loanState.loading && loanState.error == null && userId.isNotBlank()) {
-            val mapped = loanState.rows.map { row -> Emprestimo(row.id.toString(), row.usuarioId, "", listOf(row.equipamentoId.toString()), row.retirada, row.devolucao, devolvidos = if (row.status == "Devolvido") listOf(row.equipamentoId.toString()) else emptyList()) }
+            val mapped = loanState.rows.sortedByDescending { it.retirada }.map { row ->
+                // O app identifica equipamento pela etiqueta; o banco guarda o id.
+                val etiqueta = equipamentosState.items.firstOrNull { it.id == row.equipamentoId }?.etiqueta ?: row.equipamentoId.toString()
+                Emprestimo(row.id.toString(), row.usuarioId, "", listOf(etiqueta), formatarData(row.retirada), row.devolucao?.let { formatarData(it) }, devolvidos = if (row.status == "Devolvido") listOf(etiqueta) else emptyList())
+            }
             banco = banco.copy(emprestimos = mapped)
         }
     }
@@ -227,8 +263,8 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
         if (!equipamentosState.loading && equipamentosState.error == null) banco = banco.copy(equipamentos = remote.map { Equipamento(it.id.toString(), it.etiqueta, "${it.marca} ${it.modelo}", it.tipo, it.status) })
     }
     LaunchedEffect(defectState.rows, equipamentosState.items) {
-        if (defectState.error == null && !defectState.loading) banco = banco.copy(problemas = defectState.rows.map { d ->
-            Problema(d.id.toString(), equipamentosState.items.firstOrNull { it.id == d.equipamentoId }?.etiqueta ?: d.equipamentoId.toString(), "${d.tipo}: ${d.descricao} (${d.status})", d.data)
+        if (defectState.error == null && !defectState.loading) banco = banco.copy(problemas = defectState.rows.filter { it.usuarioId == userId }.sortedByDescending { it.data }.map { d ->
+            Problema(d.id.toString(), equipamentosState.items.firstOrNull { it.id == d.equipamentoId }?.etiqueta ?: d.equipamentoId.toString(), "${d.tipo}: ${d.descricao} (${d.status})", formatarData(d.data))
         })
     }
 
@@ -237,19 +273,25 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
     var filtroEquipamento by remember { mutableStateOf("Todos") }
     var filtroAtividade by remember { mutableStateOf("Todos") }
     var mensagem by remember { mutableStateOf<String?>(null) }
-    val selecionados = remember { mutableStateListOf<String>() }
     var mostrarProblema by remember { mutableStateOf(false) }
     var scannerVisible by remember { mutableStateOf(false) }
     var codigoEscaneado by remember { mutableStateOf<String?>(null) }
     var equipamentoEtiqueta by remember { mutableStateOf<Equipamento?>(null) }
     var problemaCodigo by remember { mutableStateOf("") }
+    var devolverEm by remember { mutableStateOf<Emprestimo?>(null) }
     var problemaDescricao by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(mensagem) {
         mensagem?.let { snackbarHostState.showSnackbar(it); mensagem = null }
     }
+    LaunchedEffect(loanState.notice) { loanState.notice?.let { mensagem = it; equipmentViewModel.carregar(silencioso = true) } }
+    LaunchedEffect(loanState.error) { loanState.error?.let { mensagem = it } }
     if (scannerVisible) {
-        BarcodeScannerScreen(onClose = { scannerVisible = false }, onCodeRead = { codigo -> codigoEscaneado = codigo; scannerVisible = false })
+        BarcodeScannerScreen(onClose = { scannerVisible = false }, onCodeRead = { codigo ->
+            equipmentViewModel.carregar(silencioso = true)
+            if (userId.isNotBlank()) loanViewModel.carregar(userId, silencioso = true)
+            codigoEscaneado = codigo; scannerVisible = false
+        })
     } else Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }, topBar = {
         TopAppBar(title = { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Surface(color = MaterialTheme.colorScheme.onPrimary.copy(alpha = .14f), shape = RoundedCornerShape(14.dp)) {
@@ -262,8 +304,8 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
         } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primary, titleContentColor = MaterialTheme.colorScheme.onPrimary, actionIconContentColor = MaterialTheme.colorScheme.onPrimary, navigationIconContentColor = MaterialTheme.colorScheme.onPrimary))
     }, bottomBar = {
         NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp, windowInsets = NavigationBarDefaults.windowInsets) {
-            listOf("Início" to "Início", "Pedir" to "Pedir", "Itens" to "Equipamentos", "Atividade" to "Atividade", "Ajustes" to "Ajustes").forEach { (rótulo, destino) ->
-                val icon = when (destino) { "Início" -> Icons.Default.Home; "Pedir" -> Icons.AutoMirrored.Filled.Assignment; "Equipamentos" -> Icons.Default.Devices; "Atividade" -> Icons.Default.Search; else -> Icons.Default.MoreHoriz }
+            listOf("Início" to "Início", "Pedir" to "Pedir", "Atividade" to "Atividade", "Ajustes" to "Ajustes").forEach { (rótulo, destino) ->
+                val icon = when (destino) { "Início" -> Icons.Default.Home; "Pedir" -> Icons.Default.QrCode2; "Atividade" -> Icons.AutoMirrored.Filled.Assignment; else -> Icons.Default.MoreHoriz }
                 NavigationBarItem(selected = aba == destino, onClick = { aba = destino; pesquisa = "" }, icon = { Icon(icon, contentDescription = rótulo) }, label = { Text(rótulo, fontSize = 11.sp, maxLines = 1) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary, indicatorColor = MaterialTheme.colorScheme.primaryContainer, unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant))
             }
         }
@@ -271,19 +313,10 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.widthIn(max = 760.dp).fillMaxHeight().align(Alignment.TopCenter)) {
                 when (aba) {
-                    "Início" -> Inicio(banco, nomeProfessor, onIr = { aba = it })
-                    "Pedir" -> Emprestar(banco, selecionados, onConfirmar = {
-                        val escolhidos = selecionados.toList()
-                        val equipment = equipamentosState.items.firstOrNull { it.etiqueta == escolhidos.firstOrNull() }
-                        if (userId.isBlank()) mensagem = "Entre novamente para realizar empréstimos."
-                        else if (escolhidos.size != 1) mensagem = "Selecione um equipamento por operação para garantir consistência."
-                        else if (equipment == null) mensagem = "Equipamento não localizado no catálogo do Supabase."
-                        else loanViewModel.emprestar(equipment.id, userId)
-                    }, onProblema = { problemaCodigo = ""; mostrarProblema = true }, onEscanear = { scannerVisible = true })
-                    "Equipamentos" -> Column {
-                        when { equipamentosState.loading -> LinearProgressIndicator(Modifier.fillMaxWidth()); equipamentosState.error != null -> Text("Falha ao carregar Supabase: ${equipamentosState.error}", color = MaterialTheme.colorScheme.error); else -> Unit }
-                        Inventario(banco, pesquisa, { pesquisa = it }, filtroEquipamento, { filtroEquipamento = it }, onReportar = { codigo -> problemaCodigo = codigo; mostrarProblema = true }, onEscanear = { scannerVisible = true }, onEtiqueta = { equipamentoEtiqueta = it })
-                    }
+                    "Início" -> Inicio(banco, nomeProfessor, onIr = { aba = it }, onEscanear = { scannerVisible = true }, onDevolver = { devolverEm = it }, onProblema = { c -> problemaCodigo = c; problemaDescricao = ""; mostrarProblema = true })
+                    "Pedir" -> Emprestar(onEscanear = { scannerVisible = true }, onBuscarCodigo = { codigoEscaneado = it },
+                        ativos = banco.emprestimos.filter { it.devolucao == null }, equipamentos = banco.equipamentos,
+                        onDevolver = { devolverEm = it }, onProblemaEquipamento = { c -> problemaCodigo = c; problemaDescricao = ""; mostrarProblema = true })
                     "Atividade" -> Column {
                         if (loanState.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                         loanState.error?.let { Text("Falha ao consultar histórico: $it", color = MaterialTheme.colorScheme.error) }
@@ -293,7 +326,7 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
                             else loanViewModel.devolver(id, userId)
                         })
                     }
-                    else -> Mais(banco, nomeProfessor, modoVisual, onModoVisual, onProblema = { problemaCodigo = ""; mostrarProblema = true }, onSair = onSair)
+                    else -> Mais(banco, nomeProfessor, modoVisual, onModoVisual, onSair = onSair)
                 }
             }
         }
@@ -315,6 +348,21 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
         }
     }) { Text("Registrar") } }, dismissButton = { TextButton(onClick = { mostrarProblema = false }) { Text("Cancelar") } })
 
+    devolverEm?.let { em ->
+        val eq = banco.equipamentos.firstOrNull { it.codigo == em.codigos.firstOrNull() }
+        AlertDialog(
+            onDismissRequest = { devolverEm = null },
+            title = { Text("Confirmar devolução") },
+            text = { Text("Confirma a devolução de ${eq?.nome ?: "este equipamento"}${em.codigos.firstOrNull()?.let { " ($it)" } ?: ""}?") },
+            confirmButton = { Button(onClick = {
+                val id = em.id.toLongOrNull()
+                if (id == null || userId.isBlank()) mensagem = "Empréstimo ou sessão inválidos." else loanViewModel.devolver(id, userId)
+                devolverEm = null
+            }) { Text("Confirmar") } },
+            dismissButton = { TextButton(onClick = { devolverEm = null }) { Text("Voltar") } }
+        )
+    }
+
     equipamentoEtiqueta?.let { equipamento ->
         EquipmentLabelDialog(
             equipment = equipamento,
@@ -334,7 +382,8 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
 
     codigoEscaneado?.let { codigo ->
         val equipamento = EquipmentCodeLookup.find(banco.equipamentos, codigo)
-        val historico = equipamento?.let { eq -> banco.emprestimos.filter { eq.codigo in it.codigos }.take(3) }.orEmpty()
+        val meuEmprestimo = equipamento?.let { eq -> banco.emprestimos.firstOrNull { it.devolucao == null && eq.codigo in it.codigos } }
+        val ocupado = loanState.loading
         AlertDialog(
             onDismissRequest = { codigoEscaneado = null },
             title = { Text(if (equipamento == null) "Equipamento não encontrado" else "Equipamento identificado") },
@@ -344,31 +393,34 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
                     Text(equipamento.nome, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text("Patrimônio / código: ${equipamento.codigo}")
                     Text("Categoria: ${equipamento.tipo}")
-                    Text("Situação: ${equipamento.status}")
-                    if (historico.isNotEmpty()) {
-                        HorizontalDivider()
-                        Text("Histórico recente", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                        historico.forEach { Text("${it.inicio} · ${if (it.devolucao == null) "Em aberto" else "Concluído"}", style = MaterialTheme.typography.bodySmall) }
+                    StatusPill(if (meuEmprestimo != null) "Com você" else equipamento.status)
+                    when {
+                        meuEmprestimo != null -> Text("Este equipamento está emprestado para você.")
+                        equipamento.status == "Disponível" -> Text("Disponível para empréstimo.")
+                        equipamento.status == "Manutenção" -> Text("Em manutenção. Não pode ser emprestado agora.")
+                        else -> Text("Em uso por outra pessoa. Não pode ser emprestado agora.")
                     }
+                    OutlinedButton(onClick = {
+                        problemaCodigo = equipamento.codigo; problemaDescricao = ""; mostrarProblema = true; codigoEscaneado = null
+                    }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("Informar problema") }
                 }
             },
             confirmButton = {
-                if (equipamento != null) TextButton(onClick = { pesquisa = equipamento.codigo; aba = "Equipamentos"; codigoEscaneado = null }) { Text("Ver no catálogo") }
+                if (equipamento == null) TextButton(onClick = { codigoEscaneado = null }) { Text("Fechar") }
+                else if (meuEmprestimo != null) Button(onClick = {
+                    val idEmprestimo = meuEmprestimo.id.toLongOrNull()
+                    if (idEmprestimo == null || userId.isBlank()) mensagem = "Empréstimo ou sessão inválidos."
+                    else { loanViewModel.devolver(idEmprestimo, userId); codigoEscaneado = null }
+                }, enabled = !ocupado) { Text("Devolver equipamento") }
+                else if (EquipmentCodeLookup.canRequest(equipamento)) Button(onClick = {
+                    val idEquipamento = equipamento.id.toLongOrNull()
+                    if (idEquipamento == null || userId.isBlank()) mensagem = "Entre novamente para realizar empréstimos."
+                    else { loanViewModel.emprestar(idEquipamento, userId); codigoEscaneado = null }
+                }, enabled = !ocupado) { Text("Pedir emprestado") }
+                else TextButton(onClick = { codigoEscaneado = null }) { Text("Fechar") }
             },
             dismissButton = {
-                Row {
-                    if (equipamento != null && EquipmentCodeLookup.canRequest(equipamento)) TextButton(onClick = {
-                        if (equipamento.codigo !in selecionados) selecionados.add(equipamento.codigo)
-                        aba = "Pedir"
-                        codigoEscaneado = null
-                    }) { Text(if (equipamento.codigo in selecionados) "Já selecionado" else "Preparar pedido") }
-                    if (equipamento != null && EquipmentCodeLookup.canReturn(equipamento)) TextButton(onClick = {
-                        pesquisa = equipamento.codigo
-                        aba = "Atividade"
-                        codigoEscaneado = null
-                    }) { Text("Ver devolução") }
-                    TextButton(onClick = { codigoEscaneado = null }) { Text("Fechar") }
-                }
+                if (equipamento != null && (meuEmprestimo != null || EquipmentCodeLookup.canRequest(equipamento))) TextButton(onClick = { codigoEscaneado = null }) { Text("Cancelar") }
             }
         )
     }
@@ -376,38 +428,32 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
 }
 
 @Composable
-private fun Inicio(banco: BancoLocal, nomeProfessor: String, onIr: (String) -> Unit) {
-    val emUso = banco.equipamentos.count { it.status == "Em uso" }; val disponiveis = banco.equipamentos.count { it.status == "Disponível" }; val manutencao = banco.equipamentos.count { it.status == "Manutenção" }
+private fun Inicio(banco: BancoLocal, nomeProfessor: String, onIr: (String) -> Unit, onEscanear: () -> Unit, onDevolver: (Emprestimo) -> Unit, onProblema: (String) -> Unit) {
+    val disponiveis = banco.equipamentos.count { it.status == "Disponível" }
     val notebooks = banco.equipamentos.count { it.tipo.contains("notebook", ignoreCase = true) }
     val tablets = banco.equipamentos.count { it.tipo.contains("tablet", ignoreCase = true) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .12f)), shape = RoundedCornerShape(22.dp)) { Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = .10f), shape = RoundedCornerShape(14.dp)) { Icon(Icons.Default.Home, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(9.dp).size(22.dp)) }
             Text(if (nomeProfessor.isBlank()) "Olá, professor(a)!" else "Olá, ${nomeProfessor.substringBefore(' ')}!", color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("Acompanhe os equipamentos da escola e organize o que precisa para sua aula.", color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .82f), style = MaterialTheme.typography.bodyMedium)
-            Button(onClick = { onIr("Pedir") }, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) { Icon(Icons.Default.Add, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Solicitar equipamento") }
+            Text("Escaneie o QR Code do equipamento para pedir emprestado e acompanhe o que está com você.", color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .82f), style = MaterialTheme.typography.bodyMedium)
+            Button(onClick = onEscanear, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) { Icon(Icons.Default.QrCode2, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Escanear e pedir equipamento") }
         } } }
         item { Text("Equipamentos da escola", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ResumoCard("Notebooks", notebooks.toString(), MaterialTheme.colorScheme.primary, Icons.Default.Devices, Modifier.weight(1f))
             ResumoCard("Tablets", tablets.toString(), MaterialTheme.colorScheme.primary, Icons.Default.Devices, Modifier.weight(1f))
-        } }
-        item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ResumoCard("Livres", disponiveis.toString(), MaterialTheme.colorScheme.secondary, Icons.Default.CheckCircle, Modifier.weight(1f))
-            ResumoCard("Em uso", emUso.toString(), MaterialTheme.colorScheme.primary, Icons.Default.Devices, Modifier.weight(1f))
-            ResumoCard("Reparo", manutencao.toString(), MaterialTheme.colorScheme.tertiary, Icons.Default.ReportProblem, Modifier.weight(1f))
         } }
         item { Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Seus empréstimos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             TextButton(onClick = { onIr("Atividade") }) { Text("Ver atividade") }
         } }
         val ativos = banco.emprestimos.filter { it.devolucao == null }
-        if (banco.equipamentos.isEmpty()) item { EmptyCard("Catálogo vazio", "Solicite à administração da escola o cadastro dos equipamentos.", Icons.Default.Devices) }
         if (ativos.isEmpty()) item { EmptyCard("Tudo em dia", if (nomeProfessor.isBlank()) "Solicite equipamentos quando precisar." else "Você não tem equipamento emprestado no momento.", Icons.Default.Inbox) }
-        items(ativos.take(4), key = { it.id }) { EmprestimoCard(it, banco.equipamentos, onAbrir = { onIr("Atividade") }) }
+        items(ativos.take(4), key = { it.id }) { AtivoCard(it, banco.equipamentos, onDevolver, onProblema) }
         item { Text("Acesso rápido", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         item { Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            FilledTonalButton(onClick = { onIr("Equipamentos") }, modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Icon(Icons.Default.Devices, null); Spacer(Modifier.width(7.dp)); Text("Consultar itens") }
             OutlinedButton(onClick = { onIr("Atividade") }, modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Icon(Icons.AutoMirrored.Filled.Assignment, null); Spacer(Modifier.width(7.dp)); Text("Minhas atividades") }
         } }
     }
@@ -427,35 +473,25 @@ private fun ResumoCard(titulo: String, valor: String, cor: androidx.compose.ui.g
 }
 
 @Composable
-private fun Emprestar(banco: BancoLocal, selecionados: MutableList<String>, onConfirmar: () -> Unit, onProblema: () -> Unit, onEscanear: () -> Unit) {
-    val disponiveis = banco.equipamentos.filter { it.status == "Disponível" }
-    var confirmarPedido by remember { mutableStateOf(false) }
-    val podeEnviar = selecionados.isNotEmpty() && selecionados.all { codigo -> disponiveis.any { it.codigo == codigo } }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { TituloSecao("Pedir equipamento", "Escolha os itens que precisa para sua aula.") }
-        item { OutlinedButton(onClick = onEscanear, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Icon(Icons.Default.Search, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Escanear equipamento") } }
-        item { Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Escolha seus equipamentos", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text("${selecionados.size} selecionado(s) • ${disponiveis.size} livres", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun Emprestar(onEscanear: () -> Unit, onBuscarCodigo: (String) -> Unit, ativos: List<Emprestimo>, equipamentos: List<Equipamento>, onDevolver: (Emprestimo) -> Unit, onProblemaEquipamento: (String) -> Unit) {
+    var codigoManual by remember { mutableStateOf("") }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item { TituloSecao("Pedir equipamento", "Escaneie o QR Code ou o código de barras do equipamento que você vai usar.") }
+        item { Button(onClick = onEscanear, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Icon(Icons.Default.QrCode2, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Escanear equipamento") } }
+        item { Text("Com você agora", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+        if (ativos.isEmpty()) item { Text("Nenhum equipamento com você no momento.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        items(ativos, key = { it.id }) { AtivoCard(it, equipamentos, onDevolver, onProblemaEquipamento) }
+        item { Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shape = RoundedCornerShape(18.dp)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Sem câmera ou etiqueta ilegível?", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text("Digite o código impresso na etiqueta do equipamento.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedTextField(codigoManual, { codigoManual = it }, Modifier.fillMaxWidth(), label = { Text("Código do equipamento") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { if (codigoManual.isNotBlank()) onBuscarCodigo(codigoManual.trim()) }))
+                OutlinedButton(onClick = { onBuscarCodigo(codigoManual.trim()) }, enabled = codigoManual.isNotBlank(), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Buscar equipamento") }
+            }
         } }
-        if (disponiveis.isEmpty()) item { EmptyCard("Nenhum equipamento livre agora", "Confira novamente mais tarde ou informe um problema em Ajustes.") }
-        items(disponiveis, key = { it.id }) { eq -> Card(Modifier.fillMaxWidth().clickable { if (eq.codigo in selecionados) selecionados.remove(eq.codigo) else selecionados.add(eq.codigo) }, border = BorderStroke(1.dp, if (eq.codigo in selecionados) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant), colors = CardDefaults.cardColors(containerColor = if (eq.codigo in selecionados) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .65f) else MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(16.dp)) {
-            Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Checkbox(eq.codigo in selecionados, { if (it) selecionados.add(eq.codigo) else selecionados.remove(eq.codigo) }); Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(12.dp)) { Icon(Icons.Default.Devices, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(9.dp).size(22.dp)) }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) { Text(eq.nome, fontWeight = FontWeight.SemiBold); Text("${eq.tipo}  •  ${eq.codigo}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Text("Livre", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.SemiBold) }
-        } }
-        if (!podeEnviar) item { Text("Selecione ao menos um equipamento.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        item { Button(onClick = { confirmarPedido = true }, Modifier.fillMaxWidth(), enabled = podeEnviar) { Icon(Icons.AutoMirrored.Filled.Assignment, null); Spacer(Modifier.width(8.dp)); Text("Revisar pedido") } }
-        item { OutlinedButton(onClick = onProblema, Modifier.fillMaxWidth()) { Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("Informar problema em equipamento") } }
     }
-    if (confirmarPedido) AlertDialog(
-        onDismissRequest = { confirmarPedido = false },
-        title = { Text("Confirme seu pedido") },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Equipamentos (${selecionados.size})", fontWeight = FontWeight.SemiBold)
-            selecionados.forEach { codigo -> Text("• ${disponiveis.firstOrNull { it.codigo == codigo }?.nome ?: codigo} ($codigo)", style = MaterialTheme.typography.bodySmall) }
-        } },
-        confirmButton = { Button(onClick = { confirmarPedido = false; onConfirmar() }) { Text("Confirmar pedido") } },
-        dismissButton = { TextButton(onClick = { confirmarPedido = false }) { Text("Voltar") } }
-    )
 }
 
 @Composable
@@ -544,7 +580,6 @@ private fun Mais(
     nomeProfessor: String,
     modoVisual: String,
     onModoVisual: (String) -> Unit,
-    onProblema: () -> Unit,
     onSair: () -> Unit
 ) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -565,13 +600,7 @@ private fun Mais(
             }
             if (modoVisual == "Aparelho") Text("O tema acompanha a configuração do seu celular.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } } }
-        item { Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shape = RoundedCornerShape(18.dp)) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Ajuda e dados", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text("Relate um defeito em algum equipamento.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            OutlinedButton(onClick = onProblema, Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("Informar problema") }
-        } } }
         item { OutlinedButton(onClick = onSair, Modifier.fillMaxWidth()) { Text("Sair da conta") } }
-        item { Text("${banco.equipamentos.size} equipamentos disponíveis no catálogo", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }
 
@@ -588,6 +617,28 @@ private fun EmprestimoCard(em: Emprestimo, equipamentos: List<Equipamento>, onAb
                 Text("${item?.nome ?: "Equipamento"} • $codigo", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
             }
             TextButton(onClick = onAbrir, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) { Text("Acompanhar devolução") }
+        }
+    }
+}
+
+@Composable
+private fun AtivoCard(em: Emprestimo, equipamentos: List<Equipamento>, onDevolver: (Emprestimo) -> Unit, onProblema: (String) -> Unit) {
+    val codigo = em.codigos.firstOrNull().orEmpty()
+    val item = equipamentos.firstOrNull { it.codigo == codigo }
+    Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Icon(Icons.Default.Devices, null, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(item?.nome ?: "Equipamento", fontWeight = FontWeight.SemiBold)
+                    Text("$codigo  •  desde ${em.inicio}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                StatusPill("Em uso")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { onDevolver(em) }, modifier = Modifier.weight(1f)) { Text("Devolver") }
+                OutlinedButton(onClick = { onProblema(codigo) }, modifier = Modifier.weight(1f)) { Text("Informar problema") }
+            }
         }
     }
 }

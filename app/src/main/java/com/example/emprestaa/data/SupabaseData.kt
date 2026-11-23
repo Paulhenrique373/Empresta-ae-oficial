@@ -3,7 +3,10 @@ package com.example.emprestaa.data
 import com.example.emprestaa.BuildConfig
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.auth.SessionManager
 import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.status.SessionStatus
+import io.github.jan.supabase.auth.user.UserSession
 import io.github.jan.supabase.auth.providers.builtin.Email
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.postgrest
@@ -11,14 +14,43 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 object SupabaseProvider {
+    private var appContext: android.content.Context? = null
+
+    /** Chamado no MainActivity.onCreate, antes de qualquer uso do cliente. */
+    fun init(context: android.content.Context) { appContext = context.applicationContext }
+
     val client by lazy {
         require(BuildConfig.SUPABASE_URL.isNotBlank() && BuildConfig.SUPABASE_ANON_KEY.isNotBlank()) { "Configure SUPABASE_URL e SUPABASE_ANON_KEY em local.properties." }
+        val contexto = appContext
         createSupabaseClient(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_ANON_KEY) {
-            install(Auth)
+            install(Auth) {
+                // Guarda a sessão no aparelho para o professor continuar logado ao fechar/reabrir o app.
+                if (contexto != null) sessionManager = PrefsSessionManager(contexto)
+            }
             install(Postgrest)
         }
+    }
+}
+
+/** Guarda a sessão do Supabase em SharedPreferences privado do app (allowBackup=false). */
+class PrefsSessionManager(context: android.content.Context) : SessionManager {
+    private val prefs = context.getSharedPreferences("empresta-ae-sessao", android.content.Context.MODE_PRIVATE)
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    override suspend fun saveSession(session: UserSession) {
+        prefs.edit().putString("sessao", json.encodeToString(UserSession.serializer(), session)).apply()
+    }
+
+    override suspend fun loadSession(): UserSession? =
+        prefs.getString("sessao", null)?.let { texto ->
+            runCatching { json.decodeFromString(UserSession.serializer(), texto) }.getOrNull()
+        }
+
+    override suspend fun deleteSession() {
+        prefs.edit().remove("sessao").apply()
     }
 }
 
@@ -58,6 +90,16 @@ class AuthRepository {
         return SessaoUsuario(id, usuario.nome, perfis)
     }
     suspend fun sair() = SupabaseProvider.client.auth.signOut()
+    /** Avisa quando a sessão existe (perdida = false) ou deixou de existir (perdida = true). */
+    suspend fun observarSessao(aoMudar: (perdida: Boolean) -> Unit) {
+        SupabaseProvider.client.auth.sessionStatus.collect { status ->
+            when (status) {
+                is SessionStatus.Authenticated -> aoMudar(false)
+                is SessionStatus.NotAuthenticated -> aoMudar(true)
+                else -> Unit
+            }
+        }
+    }
     suspend fun recuperar(email: String) = SupabaseProvider.client.auth.resetPasswordForEmail(email)
 }
 
@@ -70,8 +112,8 @@ class EmprestimoRepository {
     suspend fun meusAtivos(usuarioId: String) = SupabaseProvider.client.from("emprestimos").select { filter { eq("id_usuario", usuarioId); eq("status", "Ativo") } }.decodeList<EmprestimoRow>()
     suspend fun historico(usuarioId: String) = SupabaseProvider.client.from("emprestimos").select { filter { eq("id_usuario", usuarioId) } }.decodeList<EmprestimoRow>()
     suspend fun listarGestao() = SupabaseProvider.client.from("emprestimos").select().decodeList<EmprestimoRow>()
-    suspend fun retirar(equipamentoId: Long) { SupabaseProvider.client.postgrest.rpc("emprestar_equipamento", kotlinx.serialization.json.buildJsonObject { put("p_id_equipamento", kotlinx.serialization.json.JsonPrimitive(equipamentoId)) }) }
-    suspend fun devolver(emprestimoId: Long) { SupabaseProvider.client.postgrest.rpc("devolver_equipamento", kotlinx.serialization.json.buildJsonObject { put("p_id_emprestimo", kotlinx.serialization.json.JsonPrimitive(emprestimoId)) }) }
+    suspend fun retirar(equipamentoId: Long) { SupabaseProvider.client.postgrest.rpc("registrar_emprestimo", kotlinx.serialization.json.buildJsonObject { put("p_id_equipamento", kotlinx.serialization.json.JsonPrimitive(equipamentoId)) }) }
+    suspend fun devolver(emprestimoId: Long) { SupabaseProvider.client.postgrest.rpc("registrar_devolucao", kotlinx.serialization.json.buildJsonObject { put("p_id_emprestimo", kotlinx.serialization.json.JsonPrimitive(emprestimoId)) }) }
 }
 class DefeitoRepository {
     suspend fun registrar(item: DefeitoInsert) { SupabaseProvider.client.from("defeitos").insert(item) }
