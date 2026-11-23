@@ -38,6 +38,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.foundation.selection.toggleable
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.unit.Dp
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.text.font.FontWeight
@@ -87,6 +103,9 @@ private fun formatarData(iso: String): String = runCatching {
 
 private fun agora(): String = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("pt", "BR")).format(Date())
 
+// true quando "Contraste alto" está ligado; usado onde o app aplica transparência fixa em cores.
+private val LocalAltoContraste = compositionLocalOf { false }
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,6 +120,7 @@ private fun EmprestaAppRoot(authViewModel: AuthViewModel = viewModel()) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("empresta-ae-local", 0) }
     var modo by remember { mutableStateOf(prefs.getString("modo_visual", "Aparelho") ?: "Aparelho") }
+    var acessibilidade by remember { mutableStateOf(AcessibilidadeStorage.carregar(prefs)) }
     var nomeProfessor by remember { mutableStateOf(prefs.getString("nome_professor", "") ?: "") }
     var demonstracaoAtiva by remember { mutableStateOf(prefs.getString("supabase_user_id", null) != null) }
     val dark = modo == "Escuro" || (modo == "Aparelho" && isSystemInDarkTheme())
@@ -113,26 +133,38 @@ private fun EmprestaAppRoot(authViewModel: AuthViewModel = viewModel()) {
             demonstracaoAtiva = false
         }
     }
-    EmprestaAêTheme(darkTheme = dark) {
-        if (demonstracaoAtiva) {
-            EmprestaApp(
-                modoVisual = modo,
-                nomeProfessor = nomeProfessor,
-                onModoVisual = { modo = it; prefs.edit().putString("modo_visual", it).apply() },
-                onSair = {
-                    authViewModel.logout()
-                    prefs.edit()
-                        .remove("supabase_user_id")
-                        .remove("nome_professor")
-                        .apply()
-                    nomeProfessor = ""
-                    demonstracaoAtiva = false
-                }
-            )
-        } else TelaLogin(authViewModel, onContinuarDemonstracao = { user ->
-            prefs.edit().putString("supabase_user_id", user.id).putString("nome_professor", user.nome).apply()
-            nomeProfessor = user.nome; demonstracaoAtiva = true
-        })
+    // Tamanho do texto global: multiplica o tamanho de fonte do sistema (afeta todos os sp do app).
+    val densidadeSistema = LocalDensity.current
+    val escalaFonte = (densidadeSistema.fontScale * acessibilidade.tamanhoTexto.fator).coerceAtMost(maxOf(densidadeSistema.fontScale, 2.0f))
+    val densidadeApp = remember(densidadeSistema.density, escalaFonte) { Density(densidadeSistema.density, escalaFonte) }
+    EmprestaAêTheme(darkTheme = dark, altoContraste = acessibilidade.altoContraste) {
+        CompositionLocalProvider(
+            LocalDensity provides densidadeApp,
+            LocalAltoContraste provides acessibilidade.altoContraste,
+            LocalMinimumInteractiveComponentSize provides (if (acessibilidade.toqueAmpliado) 56.dp else 48.dp)
+        ) {
+            if (demonstracaoAtiva) {
+                EmprestaApp(
+                    modoVisual = modo,
+                    nomeProfessor = nomeProfessor,
+                    onModoVisual = { modo = it; prefs.edit().putString("modo_visual", it).apply() },
+                    acessibilidade = acessibilidade,
+                    onAcessibilidade = { novo -> acessibilidade = novo; AcessibilidadeStorage.salvar(prefs, novo) },
+                    onSair = {
+                        authViewModel.logout()
+                        prefs.edit()
+                            .remove("supabase_user_id")
+                            .remove("nome_professor")
+                            .apply()
+                        nomeProfessor = ""
+                        demonstracaoAtiva = false
+                    }
+                )
+            } else TelaLogin(authViewModel, onContinuarDemonstracao = { user ->
+                prefs.edit().putString("supabase_user_id", user.id).putString("nome_professor", user.nome).apply()
+                nomeProfessor = user.nome; demonstracaoAtiva = true
+            })
+        }
     }
 }
 
@@ -224,7 +256,7 @@ private fun TelaLogin(authViewModel: AuthViewModel, onContinuarDemonstracao: (co
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual: (String) -> Unit, onSair: () -> Unit, equipmentViewModel: EquipmentViewModel = viewModel()) {
+private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual: (String) -> Unit, onSair: () -> Unit, acessibilidade: PreferenciasAcessibilidade, onAcessibilidade: (PreferenciasAcessibilidade) -> Unit, equipmentViewModel: EquipmentViewModel = viewModel()) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("empresta-ae-local", 0) }
     var banco by remember { mutableStateOf(BancoLocal(emptyList(), emptyList(), emptyList())) }
@@ -268,7 +300,12 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
         })
     }
 
-    var aba by remember { mutableStateOf("Início") }
+    var aba by rememberSaveable { mutableStateOf("Início") }
+    // Configurações abre pela engrenagem (não é uma aba); guarda de onde veio para o botão Voltar.
+    var abaAnterior by rememberSaveable { mutableStateOf("Início") }
+    var menuAberto by remember { mutableStateOf(false) }
+    var mostrarAjuda by remember { mutableStateOf(false) }
+    var mostrarSuporte by remember { mutableStateOf(false) }
     var pesquisa by remember { mutableStateOf("") }
     var filtroEquipamento by remember { mutableStateOf("Todos") }
     var filtroAtividade by remember { mutableStateOf("Todos") }
@@ -286,6 +323,30 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
     }
     LaunchedEffect(loanState.notice) { loanState.notice?.let { mensagem = it; equipmentViewModel.carregar(silencioso = true) } }
     LaunchedEffect(loanState.error) { loanState.error?.let { mensagem = it } }
+    // Na tela de Configurações, o botão Voltar do celular volta para a aba de onde o professor veio.
+    BackHandler(enabled = aba == "Configurações" && !scannerVisible) { aba = abaAnterior }
+    if (mostrarAjuda) AlertDialog(
+        onDismissRequest = { mostrarAjuda = false },
+        title = { Text("Ajuda") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("• Para pedir um equipamento, toque em Pedir e escaneie o QR Code.")
+                Text("• Para devolver, toque em Devolver no equipamento que está com você.")
+                Text("• Se alguma informação parecer errada, toque em Atualizar dados em Configurações.")
+                Text("• Se o problema continuar, procure a administração da escola.")
+            }
+        },
+        confirmButton = { TextButton(onClick = { mostrarAjuda = false }) { Text("Fechar") } }
+    )
+    if (mostrarSuporte) AlertDialog(
+        onDismissRequest = { mostrarSuporte = false },
+        title = { Text("Suporte técnico") },
+        text = { Text("Para ajuda técnica com o aplicativo, procure a administração da escola. Se o problema for com um equipamento, você pode registrá-lo agora.") },
+        confirmButton = {
+            TextButton(onClick = { mostrarSuporte = false; problemaCodigo = ""; problemaDescricao = ""; mostrarProblema = true }) { Text("Informar problema") }
+        },
+        dismissButton = { TextButton(onClick = { mostrarSuporte = false }) { Text("Fechar") } }
+    )
     if (scannerVisible) {
         BarcodeScannerScreen(onClose = { scannerVisible = false }, onCodeRead = { codigo ->
             equipmentViewModel.carregar(silencioso = true)
@@ -298,15 +359,35 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
                 Icon(Icons.Default.Devices, contentDescription = "Empresta Aê", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(9.dp).size(24.dp))
             }
             Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                Text("Empresta Aê", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
-                Text(if (nomeProfessor.isBlank()) "Professor" else nomeProfessor, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary.copy(alpha = .82f))
+                Text("Empresta Aê", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (nomeProfessor.isBlank()) "Professor" else nomeProfessor, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary.copy(alpha = if (LocalAltoContraste.current) 1f else .82f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-        } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primary, titleContentColor = MaterialTheme.colorScheme.onPrimary, actionIconContentColor = MaterialTheme.colorScheme.onPrimary, navigationIconContentColor = MaterialTheme.colorScheme.onPrimary))
+        } }, navigationIcon = {
+            if (aba == "Configurações") IconButton(onClick = { aba = abaAnterior }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
+            }
+        }, actions = {
+            if (aba == "Configurações") {
+                Box {
+                    IconButton(onClick = { menuAberto = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Mais opções")
+                    }
+                    DropdownMenu(expanded = menuAberto, onDismissRequest = { menuAberto = false }) {
+                        DropdownMenuItem(text = { Text("Ajuda") }, onClick = { menuAberto = false; mostrarAjuda = true })
+                        DropdownMenuItem(text = { Text("Suporte técnico") }, onClick = { menuAberto = false; mostrarSuporte = true })
+                    }
+                }
+            } else {
+                IconButton(onClick = { abaAnterior = aba; aba = "Configurações"; pesquisa = "" }) {
+                    Icon(Icons.Default.Settings, contentDescription = "Configurações")
+                }
+            }
+        }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primary, titleContentColor = MaterialTheme.colorScheme.onPrimary, actionIconContentColor = MaterialTheme.colorScheme.onPrimary, navigationIconContentColor = MaterialTheme.colorScheme.onPrimary))
     }, bottomBar = {
         NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp, windowInsets = NavigationBarDefaults.windowInsets) {
-            listOf("Início" to "Início", "Pedir" to "Pedir", "Atividade" to "Atividade", "Ajustes" to "Ajustes").forEach { (rótulo, destino) ->
-                val icon = when (destino) { "Início" -> Icons.Default.Home; "Pedir" -> Icons.Default.QrCode2; "Atividade" -> Icons.AutoMirrored.Filled.Assignment; else -> Icons.Default.MoreHoriz }
-                NavigationBarItem(selected = aba == destino, onClick = { aba = destino; pesquisa = "" }, icon = { Icon(icon, contentDescription = rótulo) }, label = { Text(rótulo, fontSize = 11.sp, maxLines = 1) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary, indicatorColor = MaterialTheme.colorScheme.primaryContainer, unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant))
+            listOf("Início" to "Início", "Pedir" to "Pedir", "Atividade" to "Atividade").forEach { (rótulo, destino) ->
+                val icon = when (destino) { "Início" -> Icons.Default.Home; "Pedir" -> Icons.Default.QrCode2; else -> Icons.AutoMirrored.Filled.Assignment }
+                NavigationBarItem(selected = aba == destino, onClick = { aba = destino; pesquisa = "" }, icon = { Icon(icon, contentDescription = null) }, label = { Text(rótulo, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary, indicatorColor = MaterialTheme.colorScheme.primaryContainer, unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant))
             }
         }
     }) { padding ->
@@ -326,7 +407,20 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
                             else loanViewModel.devolver(id, userId)
                         })
                     }
-                    else -> Mais(banco, nomeProfessor, modoVisual, onModoVisual, onSair = onSair)
+                    else -> Mais(
+                        modoVisual = modoVisual,
+                        onModoVisual = onModoVisual,
+                        acessibilidade = acessibilidade,
+                        onAcessibilidade = onAcessibilidade,
+                        onAtualizarDados = {
+                            mensagem = "Atualizando os dados…"
+                            equipmentViewModel.carregar()
+                            defectViewModel.carregar()
+                            if (userId.isNotBlank()) loanViewModel.carregar(userId)
+                        },
+                        onInformarProblema = { problemaCodigo = ""; problemaDescricao = ""; mostrarProblema = true },
+                        onSair = onSair
+                    )
                 }
             }
         }
@@ -433,10 +527,10 @@ private fun Inicio(banco: BancoLocal, nomeProfessor: String, onIr: (String) -> U
     val notebooks = banco.equipamentos.count { it.tipo.contains("notebook", ignoreCase = true) }
     val tablets = banco.equipamentos.count { it.tipo.contains("tablet", ignoreCase = true) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .12f)), shape = RoundedCornerShape(22.dp)) { Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        item { Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = if (LocalAltoContraste.current) 1f else .12f)), shape = RoundedCornerShape(22.dp)) { Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = .10f), shape = RoundedCornerShape(14.dp)) { Icon(Icons.Default.Home, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(9.dp).size(22.dp)) }
             Text(if (nomeProfessor.isBlank()) "Olá, professor(a)!" else "Olá, ${nomeProfessor.substringBefore(' ')}!", color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("Escaneie o QR Code do equipamento para pedir emprestado e acompanhe o que está com você.", color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .82f), style = MaterialTheme.typography.bodyMedium)
+            Text("Escaneie o QR Code do equipamento para pedir emprestado e acompanhe o que está com você.", color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = if (LocalAltoContraste.current) 1f else .82f), style = MaterialTheme.typography.bodyMedium)
             Button(onClick = onEscanear, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) { Icon(Icons.Default.QrCode2, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Escanear e pedir equipamento") }
         } } }
         item { Text("Equipamentos da escola", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
@@ -461,7 +555,7 @@ private fun Inicio(banco: BancoLocal, nomeProfessor: String, onIr: (String) -> U
 
 @Composable
 private fun ResumoCard(titulo: String, valor: String, cor: androidx.compose.ui.graphics.Color, icone: ImageVector, modifier: Modifier = Modifier) {
-    Card(modifier, border = BorderStroke(1.dp, cor.copy(alpha = .18f)), colors = CardDefaults.cardColors(containerColor = cor.copy(alpha = .10f)), shape = RoundedCornerShape(18.dp)) {
+    Card(modifier, border = BorderStroke(1.dp, cor.copy(alpha = if (LocalAltoContraste.current) 1f else .18f)), colors = CardDefaults.cardColors(containerColor = cor.copy(alpha = .10f)), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 13.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(icone, null, tint = cor, modifier = Modifier.size(18.dp))
@@ -576,31 +670,163 @@ private fun Historico(banco: BancoLocal, pesquisa: String, onPesquisa: (String) 
 
 @Composable
 private fun Mais(
-    banco: BancoLocal,
-    nomeProfessor: String,
     modoVisual: String,
     onModoVisual: (String) -> Unit,
+    acessibilidade: PreferenciasAcessibilidade,
+    onAcessibilidade: (PreferenciasAcessibilidade) -> Unit,
+    onAtualizarDados: () -> Unit,
+    onInformarProblema: () -> Unit,
     onSair: () -> Unit
 ) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { TituloSecao("Ajustes", "Personalize o aplicativo para o seu uso.") }
-        item { Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shape = RoundedCornerShape(18.dp)) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Seu perfil", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text(if (nomeProfessor.isBlank()) "Professor" else nomeProfessor, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-            Text("Nome vindo do cadastro da escola. Para alterar, procure a gestão.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } } }
-        item { Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shape = RoundedCornerShape(18.dp)) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Aparência", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text("Escolha como prefere visualizar o aplicativo.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("Aparelho" to "Padrão", "Claro" to "Claro", "Escuro" to "Escuro").forEach { (valor, rotulo) ->
+    val contexto = LocalContext.current
+    val alturaMinima = if (acessibilidade.toqueAmpliado) 64.dp else 52.dp
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        item { TituloSecao("Configurações", "Deixe o aplicativo do seu jeito.") }
+
+        // A) Acessibilidade
+        item {
+            SecaoConfig("Acessibilidade", "Ajustes para ler e tocar com mais facilidade.") {
+                Text("Tamanho do texto", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                TamanhoTexto.entries.forEach { opcao ->
+                    OpcaoUnica(opcao.rotulo, null, acessibilidade.tamanhoTexto == opcao, alturaMinima) {
+                        onAcessibilidade(acessibilidade.copy(tamanhoTexto = opcao))
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                LinhaChave("Contraste alto", "Deixa textos e bordas mais fortes.", acessibilidade.altoContraste, alturaMinima) {
+                    onAcessibilidade(acessibilidade.copy(altoContraste = it))
+                }
+                LinhaChave("Aumentar áreas de toque", "Deixa os botões maiores e mais fáceis de tocar.", acessibilidade.toqueAmpliado, alturaMinima) {
+                    onAcessibilidade(acessibilidade.copy(toqueAmpliado = it))
+                }
+                LinhaChave("Avisos ficam na tela", "Os avisos só somem quando você fechar.", acessibilidade.avisosPersistentes, alturaMinima) {
+                    onAcessibilidade(acessibilidade.copy(avisosPersistentes = it))
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Text("Leitor de tela", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text("Esta tela tem nomes para o leitor de tela do celular (TalkBack). Para ligar ou desligar o leitor, use as configurações do celular.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedButton(
+                    onClick = {
+                        runCatching { contexto.startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                    },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima)
+                ) { Text("Abrir acessibilidade do celular") }
+            }
+        }
+
+        // B) Aparência
+        item {
+            SecaoConfig("Aparência", "Escolha como prefere ver o aplicativo.") {
+                listOf(
+                    Triple("Aparelho", "Padrão", "Acompanha o tema do celular."),
+                    Triple("Claro", "Claro", null),
+                    Triple("Escuro", "Escuro", null)
+                ).forEach { (valor, rotulo, detalhe) ->
                     val icone = when (valor) { "Claro" -> Icons.Default.LightMode; "Escuro" -> Icons.Default.DarkMode; else -> Icons.Default.Settings }
-                    FilterChip(selected = modoVisual == valor, onClick = { onModoVisual(valor) }, label = { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) { Icon(icone, null, modifier = Modifier.size(16.dp)); Text(rotulo) } }, modifier = Modifier.weight(1f))
+                    OpcaoUnica(rotulo, detalhe, modoVisual == valor, alturaMinima, icone) { onModoVisual(valor) }
+                }
+                Text("O contraste alto pode ser usado com qualquer tema. Ligue em Acessibilidade.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        // C) Ajuda
+        item {
+            SecaoConfig("Ajuda", "Orientações rápidas para o dia a dia.") {
+                Text("• Para pedir um equipamento, toque em Pedir e escaneie o QR Code.", style = MaterialTheme.typography.bodyMedium)
+                Text("• Para devolver, toque em Devolver no equipamento que está com você.", style = MaterialTheme.typography.bodyMedium)
+                Text("• Se alguma informação parecer errada, toque em Atualizar dados.", style = MaterialTheme.typography.bodyMedium)
+                Text("• Se o problema continuar, procure a administração da escola.", style = MaterialTheme.typography.bodyMedium)
+                Button(onClick = onAtualizarDados, modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima)) {
+                    Icon(Icons.Default.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Atualizar dados")
+                }
+                OutlinedButton(onClick = onInformarProblema, modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima)) {
+                    Icon(Icons.Default.ReportProblem, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Informar problema com um equipamento")
                 }
             }
-            if (modoVisual == "Aparelho") Text("O tema acompanha a configuração do seu celular.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } } }
-        item { OutlinedButton(onClick = onSair, Modifier.fillMaxWidth()) { Text("Sair da conta") } }
+        }
+
+        // D) Sobre
+        item {
+            SecaoConfig("Sobre") {
+                Text("Empresta Aê", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text("Controle de equipamentos escolares", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Versão ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        // E) Sair
+        item {
+            OutlinedButton(
+                onClick = onSair,
+                modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Sair da conta")
+            }
+        }
+    }
+}
+
+@Composable
+private fun SecaoConfig(titulo: String, descricao: String? = null, conteudo: @Composable ColumnScope.() -> Unit) {
+    Card(
+        Modifier.fillMaxWidth(),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(titulo, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
+            if (descricao != null) Text(descricao, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            conteudo()
+        }
+    }
+}
+
+/** Opção de escolha única (como botão de rádio): a linha inteira é tocável e o leitor de tela anuncia "selecionado". */
+@Composable
+private fun OpcaoUnica(
+    rotulo: String,
+    detalhe: String?,
+    selecionado: Boolean,
+    alturaMinima: Dp,
+    icone: ImageVector? = null,
+    aoSelecionar: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = alturaMinima).selectable(selected = selecionado, role = Role.RadioButton, onClick = aoSelecionar),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        RadioButton(selected = selecionado, onClick = null)
+        if (icone != null) Icon(icone, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.weight(1f)) {
+            Text(rotulo, style = MaterialTheme.typography.bodyLarge)
+            if (detalhe != null) Text(detalhe, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Opção liga/desliga: a linha inteira é tocável e o leitor de tela anuncia "ligado/desligado". */
+@Composable
+private fun LinhaChave(titulo: String, detalhe: String, marcado: Boolean, alturaMinima: Dp, aoMudar: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = alturaMinima).toggleable(value = marcado, role = Role.Switch, onValueChange = aoMudar),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(titulo, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+            Text(detalhe, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = marcado, onCheckedChange = null)
     }
 }
 
@@ -646,7 +872,7 @@ private fun AtivoCard(em: Emprestimo, equipamentos: List<Equipamento>, onDevolve
 @Composable
 private fun StatusPill(status: String) {
     val cor = when (status) { "Disponível", "Devolvido", "Concluído" -> MaterialTheme.colorScheme.secondary; "Manutenção", "Em aberto" -> MaterialTheme.colorScheme.tertiary; else -> MaterialTheme.colorScheme.primary }
-    Surface(color = cor.copy(alpha = .13f), shape = RoundedCornerShape(8.dp)) { Text(status, Modifier.padding(horizontal = 9.dp, vertical = 5.dp), color = cor, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold) }
+    Surface(color = cor.copy(alpha = .13f), shape = RoundedCornerShape(8.dp), border = if (LocalAltoContraste.current) BorderStroke(1.dp, cor) else null) { Text(status, Modifier.padding(horizontal = 9.dp, vertical = 5.dp), color = cor, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold) }
 }
 
 @Composable

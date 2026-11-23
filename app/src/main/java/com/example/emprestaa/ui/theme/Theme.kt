@@ -49,13 +49,63 @@ private val DarkColorScheme = darkColorScheme(
     outlineVariant = Color(0xFF35435C)
 )
 
+// Contraste alto: textos em preto/branco puro e bordas bem visíveis (razão de contraste acima de 7:1
+// para textos e acima de 4,5:1 para bordas). Usado quando "Contraste alto" está ligado em Configurações.
+private val HighContrastLightColorScheme = lightColorScheme(
+    primary = Color(0xFF0033A0),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFDCE6FF),
+    onPrimaryContainer = Color(0xFF001A5C),
+    secondary = Color(0xFF0B5F3F),
+    onSecondary = Color.White,
+    tertiary = Color(0xFF7A3E00),
+    onTertiary = Color.White,
+    error = Color(0xFF9B0A1A),
+    onError = Color.White,
+    background = Color.White,
+    onBackground = Color.Black,
+    surface = Color.White,
+    onSurface = Color.Black,
+    surfaceVariant = Color(0xFFE6ECFA),
+    onSurfaceVariant = Color(0xFF1F2937),
+    outline = Color(0xFF4B5563),
+    outlineVariant = Color(0xFF4B5563)
+)
+
+private val HighContrastDarkColorScheme = darkColorScheme(
+    primary = Color(0xFFB8CCFF),
+    onPrimary = Color(0xFF00153D),
+    primaryContainer = Color(0xFF1B2F66),
+    onPrimaryContainer = Color.White,
+    secondary = Color(0xFF8FE6BE),
+    onSecondary = Color(0xFF00210F),
+    tertiary = Color(0xFFFFD39A),
+    onTertiary = Color(0xFF2B1700),
+    error = Color(0xFFFFB3B8),
+    onError = Color(0xFF3A000A),
+    background = Color.Black,
+    onBackground = Color.White,
+    surface = Color(0xFF0B0F1E),
+    onSurface = Color.White,
+    surfaceVariant = Color(0xFF1D2538),
+    onSurfaceVariant = Color(0xFFE3E9F5),
+    outline = Color(0xFFC9D3E6),
+    outlineVariant = Color(0xFFA9B6CE)
+)
+
 @Composable
 fun EmprestaAêTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    altoContraste: Boolean = false,
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
-        colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
+        colorScheme = when {
+            altoContraste && darkTheme -> HighContrastDarkColorScheme
+            altoContraste -> HighContrastLightColorScheme
+            darkTheme -> DarkColorScheme
+            else -> LightColorScheme
+        },
         typography = Typography,
         content = content
     )
