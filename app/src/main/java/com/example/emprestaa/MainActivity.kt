@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -279,12 +280,18 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
     LaunchedEffect(userId) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             var primeira = true
+            var tentativas = 0
             while (true) {
-                equipmentViewModel.carregar(silencioso = !primeira)
-                defectViewModel.carregar(silencioso = !primeira)
-                if (userId.isNotBlank()) loanViewModel.carregar(userId, silencioso = !primeira)
-                primeira = false
-                delay(10_000)
+                val trabalhos = buildList<kotlinx.coroutines.Job> {
+                    add(equipmentViewModel.carregar(silencioso = !primeira))
+                    add(defectViewModel.carregar(silencioso = !primeira))
+                    if (userId.isNotBlank()) add(loanViewModel.carregar(userId, silencioso = !primeira))
+                }
+                trabalhos.joinAll()
+                // Se a carga "de verdade" falhou (ex.: internet ainda voltando ao reabrir o app), tenta de novo logo, até 3 vezes.
+                val falhou = primeira && (equipmentViewModel.state.value.error != null || (userId.isNotBlank() && loanViewModel.state.value.error != null))
+                if (falhou && tentativas < 3) { tentativas++; delay(2_000) }
+                else { primeira = false; tentativas = 0; delay(10_000) }
             }
         }
     }
@@ -324,6 +331,7 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
     var equipamentoEtiqueta by remember { mutableStateOf<Equipamento?>(null) }
     var problemaCodigo by remember { mutableStateOf("") }
     var devolverEm by remember { mutableStateOf<Emprestimo?>(null) }
+    var confirmarDevolverTodos by rememberSaveable { mutableStateOf(false) }
     var problemaDescricao by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
     // ETAPA 6B: com "Avisos ficam na tela" ligado, o aviso só some quando o professor toca em Fechar.
@@ -340,6 +348,7 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
     }
     LaunchedEffect(loanState.notice) { loanState.notice?.let { mensagem = it; equipmentViewModel.carregar(silencioso = true) } }
     // ETAPA 6A: atualização manual dos dados (Configurações > Atualizar dados).
+    var puxando by remember { mutableStateOf(false) }
     var atualizando by remember { mutableStateOf(false) }
     var resultadoAtualizacao by remember { mutableStateOf<ResultadoAtualizacao?>(null) }
     var erroEmprestimoTratado by remember { mutableStateOf<String?>(null) }
@@ -348,7 +357,7 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
     LaunchedEffect(loanState.error) {
         val erro = loanState.error
         if (erro == null) erroEmprestimoTratado = null
-        else if (!atualizando && erro != erroEmprestimoTratado) mensagem = erro
+        else if (!atualizando && !puxando && erro != erroEmprestimoTratado) mensagem = erro
     }
     // O resultado não fica "velho": some ao trocar de tela.
     LaunchedEffect(aba) { if (!atualizando) resultadoAtualizacao = null }
@@ -357,6 +366,26 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
         if (resultadoAtualizacao != null && !acessibilidade.avisosPersistentes) {
             delay(6000)
             resultadoAtualizacao = null
+        }
+    }
+    // Puxar para atualizar (deslizar a tela para baixo nas abas Início, Pedir e Atividade).
+    fun atualizarPuxando() {
+        if (puxando || atualizando) return
+        puxando = true
+        escopoAtualizacao.launch {
+            val trabalhos = buildList<kotlinx.coroutines.Job> {
+                add(equipmentViewModel.carregar())
+                add(defectViewModel.carregar())
+                if (userId.isNotBlank()) add(loanViewModel.carregar(userId))
+            }
+            trabalhos.joinAll()
+            val falhou = userId.isBlank() ||
+                    equipmentViewModel.state.value.error != null ||
+                    defectViewModel.state.value.error != null ||
+                    loanViewModel.state.value.error != null
+            erroEmprestimoTratado = loanViewModel.state.value.error
+            if (falhou) mensagem = "Não foi possível atualizar. Verifique a internet e tente de novo."
+            puxando = false
         }
     }
     fun atualizarDados() {
@@ -451,27 +480,29 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
     }) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.widthIn(max = 760.dp).fillMaxHeight().align(Alignment.TopCenter)) {
-                when (aba) {
-                    "Início" -> Inicio(banco, nomeProfessor, onIr = { aba = it }, onEscanear = { scannerVisible = true }, onDevolver = { devolverEm = it }, onProblema = { c -> problemaCodigo = c; problemaDescricao = ""; mostrarProblema = true })
-                    "Pedir" -> Emprestar(onEscanear = { scannerVisible = true }, onBuscarCodigo = { codigoEscaneado = it },
-                        ativos = banco.emprestimos.filter { it.devolucao == null }, equipamentos = banco.equipamentos,
-                        onDevolver = { devolverEm = it }, onProblemaEquipamento = { c -> problemaCodigo = c; problemaDescricao = ""; mostrarProblema = true })
-                    "Atividade" -> Column {
-                        if (loanState.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-                        loanState.error?.let { Text("Falha ao consultar histórico: $it", color = MaterialTheme.colorScheme.error) }
-                        Historico(banco, pesquisa, { pesquisa = it }, filtroAtividade, { filtroAtividade = it }, nomeProfessor, onDevolver = { em, _ ->
-                            val id = em.id.toLongOrNull()
-                            if (id == null || userId.isBlank()) mensagem = "Empréstimo ou sessão inválidos."
-                            else loanViewModel.devolver(id, userId)
-                        })
+                if (aba == "Configurações") Mais(
+                    modoVisual = modoVisual,
+                    onModoVisual = onModoVisual,
+                    acessibilidade = acessibilidade,
+                    onAcessibilidade = onAcessibilidade,
+                    onSair = onSair
+                ) else PullToRefreshBox(isRefreshing = puxando, onRefresh = { atualizarPuxando() }, modifier = Modifier.fillMaxSize()) {
+                    when (aba) {
+                        "Início" -> Inicio(banco, nomeProfessor, onIr = { aba = it }, onEscanear = { scannerVisible = true }, onDevolver = { devolverEm = it }, onDevolverTodos = { confirmarDevolverTodos = true }, onProblema = { c -> problemaCodigo = c; problemaDescricao = ""; mostrarProblema = true }, carregando = equipamentosState.items.isEmpty())
+                        "Pedir" -> Emprestar(onEscanear = { scannerVisible = true }, onBuscarCodigo = { codigoEscaneado = it },
+                            ativos = banco.emprestimos.filter { it.devolucao == null }, equipamentos = banco.equipamentos,
+                            onDevolver = { devolverEm = it }, onDevolverTodos = { confirmarDevolverTodos = true }, onProblemaEquipamento = { c -> problemaCodigo = c; problemaDescricao = ""; mostrarProblema = true })
+                        "Atividade" -> Column {
+                            if (loanState.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                            loanState.error?.let { Text("Falha ao consultar histórico: $it", color = MaterialTheme.colorScheme.error) }
+                            Historico(banco, pesquisa, { pesquisa = it }, filtroAtividade, { filtroAtividade = it }, nomeProfessor, onDevolver = { em, _ ->
+                                val id = em.id.toLongOrNull()
+                                if (id == null || userId.isBlank()) mensagem = "Empréstimo ou sessão inválidos."
+                                else loanViewModel.devolver(id, userId)
+                            })
+                        }
+                        else -> Unit
                     }
-                    else -> Mais(
-                        modoVisual = modoVisual,
-                        onModoVisual = onModoVisual,
-                        acessibilidade = acessibilidade,
-                        onAcessibilidade = onAcessibilidade,
-                        onSair = onSair
-                    )
                 }
             }
         }
@@ -492,6 +523,22 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
             }
         }
     }) { Text("Registrar") } }, dismissButton = { TextButton(onClick = { mostrarProblema = false }) { Text("Cancelar") } })
+
+    if (confirmarDevolverTodos) {
+        val ativosAgora = banco.emprestimos.filter { it.devolucao == null }
+        AlertDialog(
+            onDismissRequest = { confirmarDevolverTodos = false },
+            title = { Text("Devolver todos?") },
+            text = { Text("Confirma a devolução dos ${ativosAgora.size} equipamentos que estão com você?") },
+            confirmButton = { Button(onClick = {
+                val ids = ativosAgora.mapNotNull { it.id.toLongOrNull() }
+                if (ids.isEmpty() || userId.isBlank()) mensagem = "Empréstimo ou sessão inválidos."
+                else loanViewModel.devolverTodos(ids, userId)
+                confirmarDevolverTodos = false
+            }) { Text("Devolver todos") } },
+            dismissButton = { TextButton(onClick = { confirmarDevolverTodos = false }) { Text("Cancelar") } }
+        )
+    }
 
     devolverEm?.let { em ->
         val eq = banco.equipamentos.firstOrNull { it.codigo == em.codigos.firstOrNull() }
@@ -545,7 +592,8 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
                         equipamento.status == "Manutenção" -> Text("Em manutenção. Não pode ser emprestado agora.")
                         else -> Text("Em uso por outra pessoa. Não pode ser emprestado agora.")
                     }
-                    OutlinedButton(onClick = {
+                    // Em manutenção o defeito já foi informado: não oferece "Informar problema" de novo.
+                    if (equipamento.status != "Manutenção") OutlinedButton(onClick = {
                         problemaCodigo = equipamento.codigo; problemaDescricao = ""; mostrarProblema = true; codigoEscaneado = null
                     }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("Informar problema") }
                 }
@@ -573,7 +621,7 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
 }
 
 @Composable
-private fun Inicio(banco: BancoLocal, nomeProfessor: String, onIr: (String) -> Unit, onEscanear: () -> Unit, onDevolver: (Emprestimo) -> Unit, onProblema: (String) -> Unit) {
+private fun Inicio(banco: BancoLocal, nomeProfessor: String, onIr: (String) -> Unit, onEscanear: () -> Unit, onDevolver: (Emprestimo) -> Unit, onDevolverTodos: () -> Unit, onProblema: (String) -> Unit, carregando: Boolean = false) {
     val disponiveis = banco.equipamentos.count { it.status == "Disponível" }
     val notebooks = banco.equipamentos.count { it.tipo.contains("notebook", ignoreCase = true) }
     val tablets = banco.equipamentos.count { it.tipo.contains("tablet", ignoreCase = true) }
@@ -586,16 +634,18 @@ private fun Inicio(banco: BancoLocal, nomeProfessor: String, onIr: (String) -> U
         } } }
         item { Text("Equipamentos da escola", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ResumoCard("Notebooks", notebooks.toString(), MaterialTheme.colorScheme.primary, Icons.Default.Devices, Modifier.weight(1f))
-            ResumoCard("Tablets", tablets.toString(), MaterialTheme.colorScheme.primary, Icons.Default.Devices, Modifier.weight(1f))
-            ResumoCard("Livres", disponiveis.toString(), MaterialTheme.colorScheme.secondary, Icons.Default.CheckCircle, Modifier.weight(1f))
+            ResumoCard("Notebooks", if (carregando) "–" else notebooks.toString(), MaterialTheme.colorScheme.primary, Icons.Default.Devices, Modifier.weight(1f))
+            ResumoCard("Tablets", if (carregando) "–" else tablets.toString(), MaterialTheme.colorScheme.primary, Icons.Default.Devices, Modifier.weight(1f))
+            ResumoCard("Livres", if (carregando) "–" else disponiveis.toString(), MaterialTheme.colorScheme.secondary, Icons.Default.CheckCircle, Modifier.weight(1f))
         } }
         item { Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Seus empréstimos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             TextButton(onClick = { onIr("Atividade") }) { Text("Ver atividade") }
         } }
         val ativos = banco.emprestimos.filter { it.devolucao == null }
-        if (ativos.isEmpty()) item { EmptyCard("Tudo em dia", if (nomeProfessor.isBlank()) "Solicite equipamentos quando precisar." else "Você não tem equipamento emprestado no momento.", Icons.Default.Inbox) }
+        if (ativos.isEmpty() && carregando) item { Text("Carregando seus empréstimos…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        else if (ativos.isEmpty()) item { EmptyCard("Tudo em dia", if (nomeProfessor.isBlank()) "Solicite equipamentos quando precisar." else "Você não tem equipamento emprestado no momento.", Icons.Default.Inbox) }
+        if (ativos.size > 1) item { OutlinedButton(onClick = onDevolverTodos, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Devolver todos (${ativos.size})") } }
         items(ativos.take(4), key = { it.id }) { AtivoCard(it, banco.equipamentos, onDevolver, onProblema) }
         item { Text("Acesso rápido", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         item { Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -618,14 +668,12 @@ private fun ResumoCard(titulo: String, valor: String, cor: androidx.compose.ui.g
 }
 
 @Composable
-private fun Emprestar(onEscanear: () -> Unit, onBuscarCodigo: (String) -> Unit, ativos: List<Emprestimo>, equipamentos: List<Equipamento>, onDevolver: (Emprestimo) -> Unit, onProblemaEquipamento: (String) -> Unit) {
+private fun Emprestar(onEscanear: () -> Unit, onBuscarCodigo: (String) -> Unit, ativos: List<Emprestimo>, equipamentos: List<Equipamento>, onDevolver: (Emprestimo) -> Unit, onDevolverTodos: () -> Unit, onProblemaEquipamento: (String) -> Unit) {
     var codigoManual by remember { mutableStateOf("") }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { TituloSecao("Pedir equipamento", "Escaneie o QR Code ou o código de barras do equipamento que você vai usar.") }
         item { Button(onClick = onEscanear, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Icon(Icons.Default.QrCode2, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Escanear equipamento") } }
-        item { Text("Com você agora", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
-        if (ativos.isEmpty()) item { Text("Nenhum equipamento com você no momento.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        items(ativos, key = { it.id }) { AtivoCard(it, equipamentos, onDevolver, onProblemaEquipamento) }
+        // Digitar o código fica logo abaixo do botão de escanear.
         item { Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shape = RoundedCornerShape(18.dp)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Sem câmera ou etiqueta ilegível?", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -636,6 +684,11 @@ private fun Emprestar(onEscanear: () -> Unit, onBuscarCodigo: (String) -> Unit, 
                 OutlinedButton(onClick = { onBuscarCodigo(codigoManual.trim()) }, enabled = codigoManual.isNotBlank(), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Buscar equipamento") }
             }
         } }
+        item { Text("Com você agora", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+        if (ativos.isEmpty()) item { Text("Nenhum equipamento com você no momento.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        // Com 2 ou mais equipamentos, aparece a opção de devolver todos de uma vez.
+        if (ativos.size > 1) item { OutlinedButton(onClick = onDevolverTodos, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Devolver todos (${ativos.size})") } }
+        items(ativos, key = { it.id }) { AtivoCard(it, equipamentos, onDevolver, onProblemaEquipamento) }
     }
 }
 

@@ -113,4 +113,23 @@ class LoanViewModel(private val repository: EmprestimoRepository = EmprestimoRep
             .onSuccess { _state.value = LoanUiState(rows = it, notice = "Devolução registrada.") }
             .onFailure { _state.value = LoanUiState(rows = _state.value.rows, error = traduzirErro(it)) }
     }
+    // Devolve vários equipamentos de uma vez, um após o outro, e recarrega a lista uma única vez no final.
+    fun devolverTodos(ids: List<Long>, uid: String, gestao: Boolean = false) = viewModelScope.launch {
+        _state.value = _state.value.copy(loading = true, error = null, notice = null)
+        var devolvidos = 0
+        var falha: Throwable? = null
+        for (id in ids) {
+            runCatching { repository.devolver(id) }
+                .onSuccess { devolvidos++ }
+                .onFailure { falha = it }
+            if (falha != null) break
+        }
+        runCatching { if (gestao) repository.listarGestao() else repository.historico(uid) }
+            .onSuccess { linhas ->
+                val erro = falha
+                _state.value = if (erro == null) LoanUiState(rows = linhas, notice = if (devolvidos == 1) "Devolução registrada." else "$devolvidos equipamentos devolvidos.")
+                else LoanUiState(rows = linhas, error = "Devolvidos: $devolvidos de ${ids.size}. " + traduzirErro(erro))
+            }
+            .onFailure { _state.value = LoanUiState(rows = _state.value.rows, error = traduzirErro(it)) }
+    }
 }
