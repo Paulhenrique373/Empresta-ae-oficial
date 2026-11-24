@@ -73,6 +73,7 @@ import com.example.emprestaa.ui.theme.EmprestaAêTheme
 import com.example.emprestaa.ui.theme.AvailableGreen
 import com.example.emprestaa.ui.theme.PendingOrange
 import com.example.emprestaa.data.AuthViewModel
+import com.example.emprestaa.data.PerfilAcesso
 import com.example.emprestaa.data.AuthState
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.emprestaa.data.EquipmentViewModel
@@ -131,6 +132,8 @@ private fun EmprestaAppRoot(authViewModel: AuthViewModel = viewModel()) {
     var acessibilidade by remember { mutableStateOf(AcessibilidadeStorage.carregar(prefs)) }
     var nomeProfessor by remember { mutableStateOf(prefs.getString("nome_professor", "") ?: "") }
     var demonstracaoAtiva by remember { mutableStateOf(prefs.getString("supabase_user_id", null) != null) }
+    // Quem tem o perfil Gestão (mesmo com outros perfis) abre o painel da Gestão. O painel confirma isso no servidor.
+    var areaGestao by remember { mutableStateOf(prefs.getBoolean("perfil_gestao", false)) }
     val dark = modo == "Escuro" || (modo == "Aparelho" && isSystemInDarkTheme())
     // Se o Supabase perder a sessão (ex.: token recusado), volta ao login em vez de mostrar dados vazios.
     val sessaoPerdida by authViewModel.sessaoPerdida.collectAsState()
@@ -145,32 +148,46 @@ private fun EmprestaAppRoot(authViewModel: AuthViewModel = viewModel()) {
     val densidadeSistema = LocalDensity.current
     val escalaFonte = (densidadeSistema.fontScale * acessibilidade.tamanhoTexto.fator).coerceAtMost(maxOf(densidadeSistema.fontScale, 2.0f))
     val densidadeApp = remember(densidadeSistema.density, escalaFonte) { Density(densidadeSistema.density, escalaFonte) }
+    val sairDaConta: () -> Unit = {
+        authViewModel.logout()
+        prefs.edit()
+            .remove("supabase_user_id")
+            .remove("nome_professor")
+            .remove("perfil_gestao")
+            .apply()
+        nomeProfessor = ""
+        areaGestao = false
+        demonstracaoAtiva = false
+    }
     EmprestaAêTheme(darkTheme = dark, altoContraste = acessibilidade.altoContraste) {
         CompositionLocalProvider(
             LocalDensity provides densidadeApp,
             LocalAltoContraste provides acessibilidade.altoContraste,
             LocalMinimumInteractiveComponentSize provides (if (acessibilidade.toqueAmpliado) 56.dp else 48.dp)
         ) {
-            if (demonstracaoAtiva) {
+            if (demonstracaoAtiva && areaGestao) {
+                GestaoDashboard(
+                    nome = nomeProfessor,
+                    usuarioId = prefs.getString("supabase_user_id", "") ?: "",
+                    onSair = sairDaConta
+                )
+            } else if (demonstracaoAtiva) {
                 EmprestaApp(
                     modoVisual = modo,
                     nomeProfessor = nomeProfessor,
                     onModoVisual = { modo = it; prefs.edit().putString("modo_visual", it).apply() },
                     acessibilidade = acessibilidade,
                     onAcessibilidade = { novo -> acessibilidade = novo; AcessibilidadeStorage.salvar(prefs, novo) },
-                    onSair = {
-                        authViewModel.logout()
-                        prefs.edit()
-                            .remove("supabase_user_id")
-                            .remove("nome_professor")
-                            .apply()
-                        nomeProfessor = ""
-                        demonstracaoAtiva = false
-                    }
+                    onSair = sairDaConta
                 )
             } else TelaLogin(authViewModel, onContinuarDemonstracao = { user ->
-                prefs.edit().putString("supabase_user_id", user.id).putString("nome_professor", user.nome).apply()
-                nomeProfessor = user.nome; demonstracaoAtiva = true
+                val ehGestao = PerfilAcesso.GESTAO in user.perfis
+                prefs.edit()
+                    .putString("supabase_user_id", user.id)
+                    .putString("nome_professor", user.nome)
+                    .putBoolean("perfil_gestao", ehGestao)
+                    .apply()
+                nomeProfessor = user.nome; areaGestao = ehGestao; demonstracaoAtiva = true
             })
         }
     }

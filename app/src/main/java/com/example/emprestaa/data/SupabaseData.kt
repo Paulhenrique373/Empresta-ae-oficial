@@ -12,6 +12,9 @@ import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -123,3 +126,44 @@ class DefeitoRepository {
 }
 class UsuarioRepository { suspend fun listar() = SupabaseProvider.client.from("usuarios").select(Columns.raw("*,usuario_perfil(perfis(nome_perfil))")).decodeList<UsuarioAdminRow>() }
 class AuditoriaRepository { suspend fun listar() = SupabaseProvider.client.from("auditoria").select().decodeList<kotlinx.serialization.json.JsonObject>() }
+
+/** Colunas que o painel usa de "equipamentos". Tudo opcional: uma coluna vazia no banco não derruba o painel. */
+@Serializable data class EquipamentoResumoRow(@SerialName("tipo_equipamento") val tipo: String? = null, val status: String? = null)
+/** Apenas a situação de uma linha de "emprestimos" ou "defeitos". */
+@Serializable data class SituacaoRow(val status: String? = null)
+/** Usuário reduzido ao necessário para contar professores. */
+@Serializable data class UsuarioPerfisRow(val ativo: Boolean = false, @SerialName("usuario_perfil") val perfis: List<UsuarioPerfilAdmin> = emptyList())
+
+/** Dados brutos lidos para o painel da Gestão. A RLS do Supabase decide o que cada conta consegue ler. */
+data class DadosGestao(
+    val equipamentos: List<EquipamentoResumoRow>,
+    val emprestimos: List<SituacaoRow>,
+    val defeitos: List<SituacaoRow>,
+    /** null quando a conta não conseguiu ler usuários/perfis (o painel mostra "–" em Professores). */
+    val professores: List<UsuarioPerfisRow>?
+)
+
+/**
+ * Painel da Gestão. Lê somente as colunas necessárias (não depende de id_usuario, descrição etc.), então linhas
+ * com campos vazios em outras colunas não quebram o painel. O perfil é validado no servidor.
+ */
+class GestaoRepository {
+    private val client get() = SupabaseProvider.client
+
+    /** Pergunta ao servidor (função usuario_e_gestao do banco) se a conta logada é da Gestão. */
+    suspend fun usuarioEGestao(): Boolean =
+        client.postgrest.rpc("usuario_e_gestao").decodeAs<Boolean>()
+
+    /** Lê tudo em paralelo. Se equipamentos, empréstimos ou defeitos falharem, a carga inteira falha. */
+    suspend fun carregarDados(): DadosGestao = coroutineScope {
+        val e = async { client.from("equipamentos").select(Columns.raw("tipo_equipamento,status")).decodeList<EquipamentoResumoRow>() }
+        val m = async { client.from("emprestimos").select(Columns.raw("status")).decodeList<SituacaoRow>() }
+        val d = async { client.from("defeitos").select(Columns.raw("status")).decodeList<SituacaoRow>() }
+        val u = async {
+            try {
+                client.from("usuarios").select(Columns.raw("ativo,usuario_perfil(perfis(nome_perfil))")).decodeList<UsuarioPerfisRow>()
+            } catch (erro: CancellationException) { throw erro } catch (erro: Throwable) { null }
+        }
+        DadosGestao(e.await(), m.await(), d.await(), u.await())
+    }
+}
