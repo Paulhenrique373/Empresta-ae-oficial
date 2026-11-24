@@ -3,17 +3,29 @@ package com.example.emprestaa
 import android.content.SharedPreferences
 
 /**
- * Tamanho do texto escolhido pelo professor.
- * O fator multiplica o tamanho de fonte do sistema (aplicado na Etapa 2B).
+ * Tamanho do texto escolhido pelo professor, em porcentagem.
+ * O percentual multiplica o tamanho de fonte do sistema (aplicado em EmprestaAppRoot).
+ * Valores salvos antigos ("Padrao", "Grande", "MuitoGrande") são convertidos automaticamente.
  */
-enum class TamanhoTexto(val valorSalvo: String, val rotulo: String, val fator: Float) {
-    PADRAO("Padrao", "Padrão", 1.0f),
-    GRANDE("Grande", "Grande", 1.15f),
-    MUITO_GRANDE("MuitoGrande", "Muito grande", 1.3f);
+enum class TamanhoTexto(val valorSalvo: String, val percentual: Int) {
+    P100("100", 100),
+    P125("125", 125),
+    P150("150", 150),
+    P175("175", 175),
+    P200("200", 200);
+
+    val rotulo: String get() = "$percentual%"
+    val fator: Float get() = percentual / 100f
 
     companion object {
-        fun deValorSalvo(valor: String?): TamanhoTexto =
-            entries.firstOrNull { it.valorSalvo == valor } ?: PADRAO
+        val PADRAO: TamanhoTexto = P100
+
+        fun deValorSalvo(valor: String?): TamanhoTexto = when (valor) {
+            "Padrao" -> P100
+            "Grande" -> P125
+            "MuitoGrande" -> P150
+            else -> entries.firstOrNull { it.valorSalvo == valor } ?: P100
+        }
     }
 }
 

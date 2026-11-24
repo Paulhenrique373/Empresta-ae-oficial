@@ -386,18 +386,15 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
     }
     // Na tela de Configurações, o botão Voltar do celular volta para a aba de onde o professor veio.
     BackHandler(enabled = aba == "Configurações" && !scannerVisible) { aba = abaAnterior }
-    if (mostrarAjuda) AlertDialog(
-        onDismissRequest = { mostrarAjuda = false },
-        title = { Text("Ajuda") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("• Para pedir um equipamento, toque em Pedir e escaneie o QR Code.")
-                Text("• Para devolver, toque em Devolver no equipamento que está com você.")
-                Text("• Se alguma informação parecer errada, toque em Atualizar dados em Configurações.")
-                Text("• Se o problema continuar, procure a administração da escola.")
-            }
-        },
-        confirmButton = { TextButton(onClick = { mostrarAjuda = false }) { Text("Fechar") } }
+    if (mostrarAjuda) DialogoAjuda(
+        atualizando = atualizando,
+        resultado = resultadoAtualizacao,
+        avisoPersistente = acessibilidade.avisosPersistentes,
+        alturaMinima = if (acessibilidade.toqueAmpliado) 64.dp else 52.dp,
+        onAtualizar = { atualizarDados() },
+        onFecharAviso = { resultadoAtualizacao = null },
+        onInformarProblema = { mostrarAjuda = false; problemaCodigo = ""; problemaDescricao = ""; mostrarProblema = true },
+        onFechar = { mostrarAjuda = false }
     )
     if (mostrarSuporte) AlertDialog(
         onDismissRequest = { mostrarSuporte = false },
@@ -473,11 +470,6 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
                         onModoVisual = onModoVisual,
                         acessibilidade = acessibilidade,
                         onAcessibilidade = onAcessibilidade,
-                        atualizando = atualizando,
-                        resultadoAtualizacao = resultadoAtualizacao,
-                        onFecharAviso = { resultadoAtualizacao = null },
-                        onAtualizarDados = { atualizarDados() },
-                        onInformarProblema = { problemaCodigo = ""; problemaDescricao = ""; mostrarProblema = true },
                         onSair = onSair
                     )
                 }
@@ -728,19 +720,77 @@ private fun Historico(banco: BancoLocal, pesquisa: String, onPesquisa: (String) 
 }
 
 @Composable
+private fun DialogoAjuda(
+    atualizando: Boolean,
+    resultado: ResultadoAtualizacao?,
+    avisoPersistente: Boolean,
+    alturaMinima: Dp,
+    onAtualizar: () -> Unit,
+    onFecharAviso: () -> Unit,
+    onInformarProblema: () -> Unit,
+    onFechar: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onFechar,
+        title = { Text("Ajuda") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Orientações rápidas para o dia a dia.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("• Para pedir um equipamento, toque em Pedir e escaneie o QR Code.", style = MaterialTheme.typography.bodyMedium)
+                Text("• Para devolver, toque em Devolver no equipamento que está com você.", style = MaterialTheme.typography.bodyMedium)
+                Text("• Se alguma informação parecer errada, toque em Atualizar dados, logo abaixo.", style = MaterialTheme.typography.bodyMedium)
+                Text("• Se o problema continuar, procure a administração da escola.", style = MaterialTheme.typography.bodyMedium)
+                Button(onClick = onAtualizar, enabled = !atualizando, modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima)) {
+                    if (atualizando) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
+                    else Icon(Icons.Default.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (atualizando) "Atualizando…" else "Atualizar dados")
+                }
+                resultado?.let { r ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            if (r.sucesso) Icons.Default.CheckCircle else Icons.Default.ReportProblem,
+                            contentDescription = null,
+                            tint = if (r.sucesso) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            r.texto,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (r.sucesso) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                        if (avisoPersistente) {
+                            TextButton(
+                                onClick = onFecharAviso,
+                                modifier = Modifier.heightIn(min = alturaMinima).semantics { contentDescription = "Fechar aviso" }
+                            ) { Text("Fechar") }
+                        }
+                    }
+                }
+                OutlinedButton(onClick = onInformarProblema, modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima)) {
+                    Icon(Icons.Default.ReportProblem, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Informar problema com um equipamento")
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onFechar) { Text("Fechar") } }
+    )
+}
+
+@Composable
 private fun Mais(
     modoVisual: String,
     onModoVisual: (String) -> Unit,
     acessibilidade: PreferenciasAcessibilidade,
     onAcessibilidade: (PreferenciasAcessibilidade) -> Unit,
-    atualizando: Boolean,
-    resultadoAtualizacao: ResultadoAtualizacao?,
-    onFecharAviso: () -> Unit,
-    onAtualizarDados: () -> Unit,
-    onInformarProblema: () -> Unit,
     onSair: () -> Unit
 ) {
-    val contexto = LocalContext.current
     val alturaMinima = if (acessibilidade.toqueAmpliado) 64.dp else 52.dp
     // ETAPA 6C: confirmação antes de sair da conta.
     var confirmarSaida by rememberSaveable { mutableStateOf(false) }
@@ -780,15 +830,6 @@ private fun Mais(
                 LinhaChave("Avisos ficam na tela", "Os avisos só somem quando você fechar.", acessibilidade.avisosPersistentes, alturaMinima) {
                     onAcessibilidade(acessibilidade.copy(avisosPersistentes = it))
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Text("Leitor de tela", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Text("Esta tela tem nomes para o leitor de tela do celular (TalkBack). Para ligar ou desligar o leitor, use as configurações do celular.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                OutlinedButton(
-                    onClick = {
-                        runCatching { contexto.startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-                    },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima)
-                ) { Text("Abrir acessibilidade do celular") }
             }
         }
 
@@ -804,53 +845,6 @@ private fun Mais(
                     OpcaoUnica(rotulo, detalhe, modoVisual == valor, alturaMinima, icone) { onModoVisual(valor) }
                 }
                 Text("O contraste alto pode ser usado com qualquer tema. Ligue em Acessibilidade.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-
-        // C) Ajuda
-        item {
-            SecaoConfig("Ajuda", "Orientações rápidas para o dia a dia.") {
-                Text("• Para pedir um equipamento, toque em Pedir e escaneie o QR Code.", style = MaterialTheme.typography.bodyMedium)
-                Text("• Para devolver, toque em Devolver no equipamento que está com você.", style = MaterialTheme.typography.bodyMedium)
-                Text("• Se alguma informação parecer errada, toque em Atualizar dados.", style = MaterialTheme.typography.bodyMedium)
-                Text("• Se o problema continuar, procure a administração da escola.", style = MaterialTheme.typography.bodyMedium)
-                Button(onClick = onAtualizarDados, enabled = !atualizando, modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima)) {
-                    if (atualizando) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
-                    else Icon(Icons.Default.Refresh, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (atualizando) "Atualizando…" else "Atualizar dados")
-                }
-                resultadoAtualizacao?.let { resultado ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            if (resultado.sucesso) Icons.Default.CheckCircle else Icons.Default.ReportProblem,
-                            contentDescription = null,
-                            tint = if (resultado.sucesso) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                        )
-                        Text(
-                            resultado.texto,
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (resultado.sucesso) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                        )
-                        if (acessibilidade.avisosPersistentes) {
-                            TextButton(
-                                onClick = onFecharAviso,
-                                modifier = Modifier.heightIn(min = alturaMinima).semantics { contentDescription = "Fechar aviso" }
-                            ) { Text("Fechar") }
-                        }
-                    }
-                }
-                OutlinedButton(onClick = onInformarProblema, modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima)) {
-                    Icon(Icons.Default.ReportProblem, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Informar problema com um equipamento")
-                }
             }
         }
 
