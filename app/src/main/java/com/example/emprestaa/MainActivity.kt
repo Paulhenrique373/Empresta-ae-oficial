@@ -81,6 +81,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import kotlinx.serialization.Serializable
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -254,6 +259,9 @@ private fun TelaLogin(authViewModel: AuthViewModel, onContinuarDemonstracao: (co
     if (mostrarRecuperacao) AlertDialog(onDismissRequest = { mostrarRecuperacao = false }, title = { Text("Recuperar acesso") }, text = { Text("A recuperação de senha ainda não está configurada. Entre em contato com a administração da sua escola para receber ajuda.") }, confirmButton = { TextButton(onClick = { mostrarRecuperacao = false }) { Text("Entendi") } })
 }
 
+/** Resultado da atualização manual, mostrado só na tela de Configurações. */
+private data class ResultadoAtualizacao(val sucesso: Boolean, val texto: String)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual: (String) -> Unit, onSair: () -> Unit, acessibilidade: PreferenciasAcessibilidade, onAcessibilidade: (PreferenciasAcessibilidade) -> Unit, equipmentViewModel: EquipmentViewModel = viewModel()) {
@@ -318,11 +326,64 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
     var devolverEm by remember { mutableStateOf<Emprestimo?>(null) }
     var problemaDescricao by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
+    // ETAPA 6B: com "Avisos ficam na tela" ligado, o aviso só some quando o professor toca em Fechar.
     LaunchedEffect(mensagem) {
-        mensagem?.let { snackbarHostState.showSnackbar(it); mensagem = null }
+        mensagem?.let { texto ->
+            val persistente = acessibilidade.avisosPersistentes
+            snackbarHostState.showSnackbar(
+                message = texto,
+                actionLabel = if (persistente) "Fechar" else null,
+                duration = if (persistente) SnackbarDuration.Indefinite else SnackbarDuration.Short
+            )
+            mensagem = null
+        }
     }
     LaunchedEffect(loanState.notice) { loanState.notice?.let { mensagem = it; equipmentViewModel.carregar(silencioso = true) } }
-    LaunchedEffect(loanState.error) { loanState.error?.let { mensagem = it } }
+    // ETAPA 6A: atualização manual dos dados (Configurações > Atualizar dados).
+    var atualizando by remember { mutableStateOf(false) }
+    var resultadoAtualizacao by remember { mutableStateOf<ResultadoAtualizacao?>(null) }
+    var erroEmprestimoTratado by remember { mutableStateOf<String?>(null) }
+    val escopoAtualizacao = rememberCoroutineScope()
+    // O erro de empréstimo só vira snackbar fora da atualização manual (que mostra o próprio resultado).
+    LaunchedEffect(loanState.error) {
+        val erro = loanState.error
+        if (erro == null) erroEmprestimoTratado = null
+        else if (!atualizando && erro != erroEmprestimoTratado) mensagem = erro
+    }
+    // O resultado não fica "velho": some ao trocar de tela.
+    LaunchedEffect(aba) { if (!atualizando) resultadoAtualizacao = null }
+    // Preferência desligada: o aviso de Configurações desaparece sozinho. Ligada: fica até o professor fechar.
+    LaunchedEffect(resultadoAtualizacao, acessibilidade.avisosPersistentes) {
+        if (resultadoAtualizacao != null && !acessibilidade.avisosPersistentes) {
+            delay(6000)
+            resultadoAtualizacao = null
+        }
+    }
+    fun atualizarDados() {
+        if (atualizando) return // evita várias atualizações ao mesmo tempo
+        atualizando = true
+        resultadoAtualizacao = null
+        escopoAtualizacao.launch {
+            val trabalhos = buildList<kotlinx.coroutines.Job> {
+                add(equipmentViewModel.carregar())
+                add(defectViewModel.carregar())
+                if (userId.isNotBlank()) add(loanViewModel.carregar(userId))
+            }
+            trabalhos.joinAll()
+            val semSessao = userId.isBlank()
+            val falhou = semSessao ||
+                    equipmentViewModel.state.value.error != null ||
+                    defectViewModel.state.value.error != null ||
+                    loanViewModel.state.value.error != null
+            erroEmprestimoTratado = loanViewModel.state.value.error
+            resultadoAtualizacao = when {
+                semSessao -> ResultadoAtualizacao(false, "Não foi possível atualizar. Entre novamente na sua conta.")
+                falhou -> ResultadoAtualizacao(false, "Não foi possível atualizar. Verifique a internet e tente de novo.")
+                else -> ResultadoAtualizacao(true, "Dados atualizados.")
+            }
+            atualizando = false
+        }
+    }
     // Na tela de Configurações, o botão Voltar do celular volta para a aba de onde o professor veio.
     BackHandler(enabled = aba == "Configurações" && !scannerVisible) { aba = abaAnterior }
     if (mostrarAjuda) AlertDialog(
@@ -412,12 +473,10 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
                         onModoVisual = onModoVisual,
                         acessibilidade = acessibilidade,
                         onAcessibilidade = onAcessibilidade,
-                        onAtualizarDados = {
-                            mensagem = "Atualizando os dados…"
-                            equipmentViewModel.carregar()
-                            defectViewModel.carregar()
-                            if (userId.isNotBlank()) loanViewModel.carregar(userId)
-                        },
+                        atualizando = atualizando,
+                        resultadoAtualizacao = resultadoAtualizacao,
+                        onFecharAviso = { resultadoAtualizacao = null },
+                        onAtualizarDados = { atualizarDados() },
                         onInformarProblema = { problemaCodigo = ""; problemaDescricao = ""; mostrarProblema = true },
                         onSair = onSair
                     )
@@ -674,12 +733,31 @@ private fun Mais(
     onModoVisual: (String) -> Unit,
     acessibilidade: PreferenciasAcessibilidade,
     onAcessibilidade: (PreferenciasAcessibilidade) -> Unit,
+    atualizando: Boolean,
+    resultadoAtualizacao: ResultadoAtualizacao?,
+    onFecharAviso: () -> Unit,
     onAtualizarDados: () -> Unit,
     onInformarProblema: () -> Unit,
     onSair: () -> Unit
 ) {
     val contexto = LocalContext.current
     val alturaMinima = if (acessibilidade.toqueAmpliado) 64.dp else 52.dp
+    // ETAPA 6C: confirmação antes de sair da conta.
+    var confirmarSaida by rememberSaveable { mutableStateOf(false) }
+    if (confirmarSaida) {
+        AlertDialog(
+            onDismissRequest = { confirmarSaida = false },
+            title = { Text("Sair da conta?") },
+            text = { Text("Tem certeza de que deseja sair da sua conta?") },
+            confirmButton = {
+                TextButton(
+                    onClick = { confirmarSaida = false; onSair() },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("Sair") }
+            },
+            dismissButton = { TextButton(onClick = { confirmarSaida = false }) { Text("Cancelar") } }
+        )
+    }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item { TituloSecao("Configurações", "Deixe o aplicativo do seu jeito.") }
 
@@ -736,10 +814,37 @@ private fun Mais(
                 Text("• Para devolver, toque em Devolver no equipamento que está com você.", style = MaterialTheme.typography.bodyMedium)
                 Text("• Se alguma informação parecer errada, toque em Atualizar dados.", style = MaterialTheme.typography.bodyMedium)
                 Text("• Se o problema continuar, procure a administração da escola.", style = MaterialTheme.typography.bodyMedium)
-                Button(onClick = onAtualizarDados, modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima)) {
-                    Icon(Icons.Default.Refresh, contentDescription = null)
+                Button(onClick = onAtualizarDados, enabled = !atualizando, modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima)) {
+                    if (atualizando) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
+                    else Icon(Icons.Default.Refresh, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Atualizar dados")
+                    Text(if (atualizando) "Atualizando…" else "Atualizar dados")
+                }
+                resultadoAtualizacao?.let { resultado ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            if (resultado.sucesso) Icons.Default.CheckCircle else Icons.Default.ReportProblem,
+                            contentDescription = null,
+                            tint = if (resultado.sucesso) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            resultado.texto,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (resultado.sucesso) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                        if (acessibilidade.avisosPersistentes) {
+                            TextButton(
+                                onClick = onFecharAviso,
+                                modifier = Modifier.heightIn(min = alturaMinima).semantics { contentDescription = "Fechar aviso" }
+                            ) { Text("Fechar") }
+                        }
+                    }
                 }
                 OutlinedButton(onClick = onInformarProblema, modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima)) {
                     Icon(Icons.Default.ReportProblem, contentDescription = null)
@@ -761,7 +866,7 @@ private fun Mais(
         // E) Sair
         item {
             OutlinedButton(
-                onClick = onSair,
+                onClick = { confirmarSaida = true },
                 modifier = Modifier.fillMaxWidth().heightIn(min = alturaMinima),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
