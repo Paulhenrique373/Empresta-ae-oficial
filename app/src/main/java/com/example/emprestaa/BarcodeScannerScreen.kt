@@ -124,7 +124,7 @@ internal fun BarcodeScannerScreen(onClose: () -> Unit, onCodeRead: (String) -> U
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    Surface(Modifier.fillMaxSize(), color = Color(0xFF080B12)) {
+    Surface(Modifier.fillMaxSize(), color = Color(0xFF07182B)) {
         Column(Modifier.fillMaxSize().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -194,10 +194,10 @@ internal fun BarcodeScannerScreen(onClose: () -> Unit, onCodeRead: (String) -> U
                         label = "scan-line-position"
                     )
                     Box(Modifier.fillMaxWidth(.82f).height(220.dp)) {
-                        Surface(Modifier.fillMaxSize(), color = Color.Transparent, shape = RoundedCornerShape(20.dp), border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF80A9FF))) {}
+                        Surface(Modifier.fillMaxSize(), color = Color.Transparent, shape = RoundedCornerShape(20.dp), border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFF4B400))) {}
                         Box(
                             Modifier.fillMaxWidth().padding(horizontal = 10.dp).offset(y = (linePosition * 190).dp)
-                                .height(2.dp).align(Alignment.TopCenter).background(Color(0xFF5B91FF))
+                                .height(2.dp).align(Alignment.TopCenter).background(Color(0xFFF4B400))
                         )
                     }
                 }
@@ -217,7 +217,7 @@ internal fun BarcodeScannerScreen(onClose: () -> Unit, onCodeRead: (String) -> U
                 }
             } else {
                 Spacer(Modifier.weight(1f))
-                Surface(color = Color(0xFF191F33), shape = RoundedCornerShape(20.dp)) {
+                Surface(color = Color(0xFF102640), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(if (permissionDenied) "A câmera é necessária para escanear" else "Permita o acesso à câmera", color = Color.White, style = MaterialTheme.typography.titleMedium)
                         Text("Você também pode fechar esta tela e pesquisar o código manualmente no catálogo.", color = Color.White.copy(alpha = .75f), style = MaterialTheme.typography.bodyMedium)

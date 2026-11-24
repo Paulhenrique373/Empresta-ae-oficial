@@ -70,6 +70,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextAlign
 import com.example.emprestaa.ui.theme.EmprestaAêTheme
+import com.example.emprestaa.ui.theme.AvailableGreen
+import com.example.emprestaa.ui.theme.PendingOrange
 import com.example.emprestaa.data.AuthViewModel
 import com.example.emprestaa.data.AuthState
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -626,17 +628,28 @@ private fun Inicio(banco: BancoLocal, nomeProfessor: String, onIr: (String) -> U
     val notebooks = banco.equipamentos.count { it.tipo.contains("notebook", ignoreCase = true) }
     val tablets = banco.equipamentos.count { it.tipo.contains("tablet", ignoreCase = true) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = if (LocalAltoContraste.current) 1f else .12f)), shape = RoundedCornerShape(22.dp)) { Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = .10f), shape = RoundedCornerShape(14.dp)) { Icon(Icons.Default.Home, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(9.dp).size(22.dp)) }
-            Text(if (nomeProfessor.isBlank()) "Olá, professor(a)!" else "Olá, ${nomeProfessor.substringBefore(' ')}!", color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("Escaneie o QR Code do equipamento para pedir emprestado e acompanhe o que está com você.", color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = if (LocalAltoContraste.current) 1f else .82f), style = MaterialTheme.typography.bodyMedium)
-            Button(onClick = onEscanear, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) { Icon(Icons.Default.QrCode2, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Escanear e pedir equipamento") }
+        item { Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+            shape = RoundedCornerShape(22.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) { Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+            Surface(color = MaterialTheme.colorScheme.onPrimary.copy(alpha = .12f), shape = RoundedCornerShape(13.dp)) {
+                Icon(Icons.Default.Home, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(10.dp).size(23.dp))
+            }
+            Text(if (nomeProfessor.isBlank()) "Olá, professor(a)!" else "Olá, ${nomeProfessor.substringBefore(' ')}!", color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("Acompanhe os equipamentos da escola e gerencie seus empréstimos em um só lugar.", color = MaterialTheme.colorScheme.onPrimary.copy(alpha = if (LocalAltoContraste.current) 1f else .88f), style = MaterialTheme.typography.bodyMedium)
+            Button(
+                onClick = onEscanear,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary, contentColor = MaterialTheme.colorScheme.onSecondary)
+            ) { Icon(Icons.Default.QrCode2, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Escanear e pedir equipamento", fontWeight = FontWeight.Bold) }
         } } }
         item { Text("Equipamentos da escola", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ResumoCard("Notebooks", if (carregando) "–" else notebooks.toString(), MaterialTheme.colorScheme.primary, Icons.Default.Devices, Modifier.weight(1f))
             ResumoCard("Tablets", if (carregando) "–" else tablets.toString(), MaterialTheme.colorScheme.primary, Icons.Default.Devices, Modifier.weight(1f))
-            ResumoCard("Livres", if (carregando) "–" else disponiveis.toString(), MaterialTheme.colorScheme.secondary, Icons.Default.CheckCircle, Modifier.weight(1f))
+            ResumoCard("Livres", if (carregando) "–" else disponiveis.toString(), MaterialTheme.colorScheme.primary, Icons.Default.CheckCircle, Modifier.weight(1f))
         } }
         item { Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Seus empréstimos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -656,7 +669,7 @@ private fun Inicio(banco: BancoLocal, nomeProfessor: String, onIr: (String) -> U
 
 @Composable
 private fun ResumoCard(titulo: String, valor: String, cor: androidx.compose.ui.graphics.Color, icone: ImageVector, modifier: Modifier = Modifier) {
-    Card(modifier, border = BorderStroke(1.dp, cor.copy(alpha = if (LocalAltoContraste.current) 1f else .18f)), colors = CardDefaults.cardColors(containerColor = cor.copy(alpha = .10f)), shape = RoundedCornerShape(18.dp)) {
+    Card(modifier, border = BorderStroke(1.dp, cor.copy(alpha = if (LocalAltoContraste.current) 1f else .22f)), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 13.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(icone, null, tint = cor, modifier = Modifier.size(18.dp))
@@ -1023,7 +1036,7 @@ private fun AtivoCard(em: Emprestimo, equipamentos: List<Equipamento>, onDevolve
 
 @Composable
 private fun StatusPill(status: String) {
-    val cor = when (status) { "Disponível", "Devolvido", "Concluído" -> MaterialTheme.colorScheme.secondary; "Manutenção", "Em aberto" -> MaterialTheme.colorScheme.tertiary; else -> MaterialTheme.colorScheme.primary }
+    val cor = when (status) { "Disponível", "Devolvido", "Concluído" -> AvailableGreen; "Manutenção", "Em aberto" -> PendingOrange; else -> MaterialTheme.colorScheme.primary }
     Surface(color = cor.copy(alpha = .13f), shape = RoundedCornerShape(8.dp), border = if (LocalAltoContraste.current) BorderStroke(1.dp, cor) else null) { Text(status, Modifier.padding(horizontal = 9.dp, vertical = 5.dp), color = cor, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold) }
 }
 
