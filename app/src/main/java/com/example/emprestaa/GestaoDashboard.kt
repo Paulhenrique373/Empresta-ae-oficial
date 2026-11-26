@@ -1,5 +1,6 @@
 package com.example.emprestaa
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -32,6 +35,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -64,6 +69,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -90,6 +96,7 @@ fun GestaoDashboard(
     nome: String,
     usuarioId: String,
     onSair: () -> Unit,
+    onIr: (String) -> Unit,
     viewModel: GestaoViewModel = viewModel(key = "gestao-$usuarioId")
 ) {
     val estado by viewModel.state.collectAsState()
@@ -124,6 +131,7 @@ fun GestaoDashboard(
     }
 
     Scaffold(
+        bottomBar = { BarraGestao(selecionada = "painel", onIr = onIr) },
         topBar = {
             TopAppBar(
                 title = {
@@ -368,10 +376,10 @@ private fun CartaoGrafico(titulo: String, conteudo: @Composable () -> Unit) {
 }
 
 /** Cores dos gráficos: legíveis no tema claro e no escuro. Sempre acompanhadas de texto e número. */
-private class Paleta(val verde: Color, val azul: Color, val laranja: Color, val cinza: Color, val serie: List<Color>)
+internal class Paleta(val verde: Color, val azul: Color, val laranja: Color, val cinza: Color, val serie: List<Color>)
 
 @Composable
-private fun rememberPaleta(): Paleta {
+internal fun rememberPaleta(): Paleta {
     val escuro = MaterialTheme.colorScheme.background.luminance() < 0.5f
     return remember(escuro) {
         if (escuro) Paleta(
@@ -461,5 +469,36 @@ private fun GraficoBarras(fatias: List<FatiaGrafico>, paleta: Paleta, textoVazio
                 }
             }
         }
+    }
+}
+
+/** Barra inferior da área da Gestão. Cada etapa nova acrescenta um destino aqui. */
+@Composable
+internal fun BarraGestao(selecionada: String, onIr: (String) -> Unit) {
+    NavigationBar {
+        listOf(
+            Triple("painel", "Painel", Icons.Default.Home),
+            Triple("equipamentos", "Equipamentos", Icons.Default.Devices)
+        ).forEach { (destino, rotulo, icone) ->
+            NavigationBarItem(
+                selected = selecionada == destino,
+                onClick = { if (selecionada != destino) onIr(destino) },
+                icon = { Icon(icone, contentDescription = null) },
+                label = { Text(rotulo, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            )
+        }
+    }
+}
+
+/** Raiz da área da Gestão: alterna entre o painel e as telas de gerenciamento. */
+@Composable
+fun GestaoApp(nome: String, usuarioId: String, onSair: () -> Unit) {
+    var tela by rememberSaveable { mutableStateOf("painel") }
+    // O botão Voltar do celular leva de volta ao painel.
+    BackHandler(enabled = tela != "painel") { tela = "painel" }
+    if (tela == "equipamentos") {
+        GestaoEquipamentos(usuarioId = usuarioId, onIr = { tela = it })
+    } else {
+        GestaoDashboard(nome = nome, usuarioId = usuarioId, onSair = onSair, onIr = { tela = it })
     }
 }

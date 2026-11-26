@@ -166,7 +166,7 @@ private fun EmprestaAppRoot(authViewModel: AuthViewModel = viewModel()) {
             LocalMinimumInteractiveComponentSize provides (if (acessibilidade.toqueAmpliado) 56.dp else 48.dp)
         ) {
             if (demonstracaoAtiva && areaGestao) {
-                GestaoDashboard(
+                GestaoApp(
                     nome = nomeProfessor,
                     usuarioId = prefs.getString("supabase_user_id", "") ?: "",
                     onSair = sairDaConta
@@ -1093,7 +1093,7 @@ private fun EmptyActivityCard(titulo: String, detalhe: String) {
 }
 
 @Composable
-private fun EquipmentLabelDialog(
+internal fun EquipmentLabelDialog(
     equipment: Equipamento,
     onDismiss: () -> Unit,
     onShare: (EquipmentLabel) -> Unit,
