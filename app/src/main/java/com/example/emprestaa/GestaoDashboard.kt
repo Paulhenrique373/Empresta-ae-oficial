@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -488,7 +489,8 @@ internal fun BarraGestao(selecionada: String, onIr: (String) -> Unit) {
         listOf(
             Triple("painel", "Painel", Icons.Default.Home),
             Triple("equipamentos", "Equipamentos", Icons.Default.Devices),
-            Triple("emprestimos", "Empréstimos", Icons.Default.SwapHoriz)
+            Triple("emprestimos", "Empréstimos", Icons.Default.SwapHoriz),
+            Triple("ocorrencias", "Ocorrências", Icons.Default.Warning)
         ).forEach { (destino, rotulo, icone) ->
             NavigationBarItem(
                 selected = selecionada == destino,
@@ -510,6 +512,8 @@ fun GestaoApp(nome: String, usuarioId: String, onSair: () -> Unit) {
         GestaoEquipamentos(usuarioId = usuarioId, onIr = { tela = it })
     } else if (tela == "emprestimos") {
         GestaoEmprestimos(usuarioId = usuarioId, onIr = { tela = it })
+    } else if (tela == "ocorrencias") {
+        GestaoOcorrencias(usuarioId = usuarioId, onIr = { tela = it })
     } else {
         GestaoDashboard(nome = nome, usuarioId = usuarioId, onSair = onSair, onIr = { tela = it })
     }

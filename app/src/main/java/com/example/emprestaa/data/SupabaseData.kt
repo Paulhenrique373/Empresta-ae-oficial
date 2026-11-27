@@ -1,4 +1,3 @@
-
 package com.example.emprestaa.data
 
 import android.content.Context
@@ -227,6 +226,30 @@ data class DefeitoRow(
     val data: String,
 
     val status: String
+)
+
+@Serializable
+data class DefeitoGestaoRow(
+    @SerialName("id_defeito")
+    val id: Long,
+
+    // Campos que podem vir nulos do banco ficam anuláveis,
+    // para uma linha incompleta não derrubar a lista inteira.
+    @SerialName("id_equipamento")
+    val equipamentoId: Long? = null,
+
+    @SerialName("id_usuario")
+    val usuarioId: String? = null,
+
+    @SerialName("tipo_defeito")
+    val tipo: String? = null,
+
+    val descricao: String? = null,
+
+    @SerialName("data_defeito")
+    val data: String? = null,
+
+    val status: String? = null
 )
 
 @Serializable
@@ -465,6 +488,15 @@ class DefeitoRepository {
             .from("defeitos")
             .select()
             .decodeList<DefeitoRow>()
+
+    /**
+     * Lista tolerante a campos nulos, usada pela Gestão.
+     */
+    suspend fun listarGestao() =
+        SupabaseProvider.client
+            .from("defeitos")
+            .select()
+            .decodeList<DefeitoGestaoRow>()
 
     suspend fun atualizarStatus(id: Long, status: String) {
         SupabaseProvider.client
