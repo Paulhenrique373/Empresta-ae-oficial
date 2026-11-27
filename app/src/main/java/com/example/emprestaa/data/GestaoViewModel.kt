@@ -58,10 +58,9 @@ private val PERFIS_PROFESSOR = setOf(
     normalizarTexto(PerfilAcesso.PROFESSOR_TECNICO.label)
 )
 
-// ATENÇÃO: o vocabulário exato de "defeitos.status" não está documentado no projeto (só se sabe que existe
-// "Em manutenção"). Um defeito é considerado ENCERRADO se a situação contém uma destas palavras; todo o resto
+// ATENÇÃO: valores vistos no banco: "Registrado", "Em manutenção" e "Consertado" (este último é encerrado). Um defeito é considerado ENCERRADO se a situação contém uma destas palavras; todo o resto
 // conta como "em aberto". Se os valores reais forem outros, ajuste somente esta lista.
-private val PALAVRAS_DEFEITO_ENCERRADO = listOf("resolv", "conclu", "fechad", "finaliz", "corrig", "solucion")
+private val PALAVRAS_DEFEITO_ENCERRADO = listOf("resolv", "conclu", "fechad", "finaliz", "corrig", "solucion", "conserta")
 
 internal fun defeitoEmAberto(situacao: String): Boolean {
     val s = normalizarTexto(situacao)

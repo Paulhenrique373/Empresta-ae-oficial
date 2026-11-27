@@ -40,6 +40,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -126,7 +127,7 @@ fun GestaoDashboard(
                     Text("Sair", color = MaterialTheme.colorScheme.error)
                 }
             },
-            dismissButton = { TextButton(onClick = { confirmarSaida = false }) { Text("Cancelar") } }
+            dismissButton = { TextButton(onClick = { confirmarSaida = false }, colors = ButtonDefaults.textButtonColors(contentColor = corBotaoTexto())) { Text("Cancelar") } }
         )
     }
 
@@ -323,7 +324,7 @@ private fun StatusAtualizacao(atualizadoEm: String?, erro: String?, onAtualizar:
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.error
                 )
-                TextButton(onClick = onAtualizar) { Text("Tentar novamente") }
+                TextButton(onClick = onAtualizar, colors = ButtonDefaults.textButtonColors(contentColor = corBotaoTexto())) { Text("Tentar novamente") }
             }
         }
     }
@@ -377,6 +378,13 @@ private fun CartaoGrafico(titulo: String, conteudo: @Composable () -> Unit) {
 
 /** Cores dos gráficos: legíveis no tema claro e no escuro. Sempre acompanhadas de texto e número. */
 internal class Paleta(val verde: Color, val azul: Color, val laranja: Color, val cinza: Color, val serie: List<Color>)
+
+/** Cor legível para botões de texto: no tema escuro a cor primária (azul-marinho) some no fundo, então usa um azul claro. */
+@Composable
+internal fun corBotaoTexto(): Color {
+    val cores = MaterialTheme.colorScheme
+    return if (cores.background.luminance() < 0.5f) cores.tertiary else cores.primary
+}
 
 @Composable
 internal fun rememberPaleta(): Paleta {

@@ -47,6 +47,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -290,7 +291,7 @@ fun GestaoEquipamentos(
                                         fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.error
                                     )
-                                    TextButton(onClick = { viewModel.carregar() }) { Text("Tentar novamente") }
+                                    TextButton(onClick = { viewModel.carregar() }, colors = ButtonDefaults.textButtonColors(contentColor = corBotaoTexto())) { Text("Tentar novamente") }
                                 }
                             }
                             if (lista.isEmpty()) item {
@@ -342,8 +343,8 @@ private fun CartaoEquipamento(eq: EquipamentoRow, cor: Color, onEditar: () -> Un
                 Text(eq.observacao, style = MaterialTheme.typography.bodySmall)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onEditar, modifier = Modifier.semantics { contentDescription = "Editar ${eq.marca} ${eq.modelo}, etiqueta ${eq.etiqueta}" }) { Text("Editar") }
-                TextButton(onClick = onEtiqueta, modifier = Modifier.semantics { contentDescription = "Gerar etiqueta de ${eq.marca} ${eq.modelo}, etiqueta ${eq.etiqueta}" }) { Text("Etiqueta") }
+                TextButton(onClick = onEditar, colors = ButtonDefaults.textButtonColors(contentColor = corBotaoTexto()), modifier = Modifier.semantics { contentDescription = "Editar ${eq.marca} ${eq.modelo}, etiqueta ${eq.etiqueta}" }) { Text("Editar") }
+                TextButton(onClick = onEtiqueta, colors = ButtonDefaults.textButtonColors(contentColor = corBotaoTexto()), modifier = Modifier.semantics { contentDescription = "Gerar etiqueta de ${eq.marca} ${eq.modelo}, etiqueta ${eq.etiqueta}" }) { Text("Etiqueta") }
             }
         }
     }
@@ -431,7 +432,8 @@ private fun FormularioEquipamentoDialog(
         confirmButton = {
             TextButton(
                 onClick = { onSalvar(FormularioEquipamento(marca, modelo, etiqueta, tipo, usoTecnico, status, observacao)) },
-                enabled = valido && !salvando
+                enabled = valido && !salvando,
+                colors = ButtonDefaults.textButtonColors(contentColor = corBotaoTexto())
             ) {
                 if (salvando) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -440,6 +442,6 @@ private fun FormularioEquipamentoDialog(
                 Text("Salvar")
             }
         },
-        dismissButton = { TextButton(onClick = onCancelar, enabled = !salvando) { Text("Cancelar") } }
+        dismissButton = { TextButton(onClick = onCancelar, enabled = !salvando, colors = ButtonDefaults.textButtonColors(contentColor = corBotaoTexto())) { Text("Cancelar") } }
     )
 }
