@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -260,7 +261,7 @@ private fun MensagemCentral(titulo: String, texto: String, botao: String, onClic
     }
 }
 
-private class Indicador(val rotulo: String, val valor: String, val destaque: Color? = null)
+private data class Indicador(val rotulo: String, val valor: String, val destaque: Color? = null)
 
 @Composable
 private fun Painel(resumo: ResumoGestao, atualizadoEm: String?, erro: String?, onAtualizar: () -> Unit) {
@@ -490,7 +491,8 @@ internal fun BarraGestao(selecionada: String, onIr: (String) -> Unit) {
             Triple("painel", "Painel", Icons.Default.Home),
             Triple("equipamentos", "Equipamentos", Icons.Default.Devices),
             Triple("emprestimos", "Empréstimos", Icons.Default.SwapHoriz),
-            Triple("ocorrencias", "Ocorrências", Icons.Default.Warning)
+            Triple("ocorrencias", "Ocorrências", Icons.Default.Warning),
+            Triple("relatorios", "Relatórios", Icons.Default.BarChart)
         ).forEach { (destino, rotulo, icone) ->
             NavigationBarItem(
                 selected = selecionada == destino,
@@ -514,6 +516,8 @@ fun GestaoApp(nome: String, usuarioId: String, onSair: () -> Unit) {
         GestaoEmprestimos(usuarioId = usuarioId, onIr = { tela = it })
     } else if (tela == "ocorrencias") {
         GestaoOcorrencias(usuarioId = usuarioId, onIr = { tela = it })
+    } else if (tela == "relatorios") {
+        GestaoRelatorios(usuarioId = usuarioId, onIr = { tela = it })
     } else {
         GestaoDashboard(nome = nome, usuarioId = usuarioId, onSair = onSair, onIr = { tela = it })
     }
