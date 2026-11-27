@@ -319,7 +319,15 @@ private fun EmprestaApp(modoVisual: String, nomeProfessor: String, onModoVisual:
             val mapped = loanState.rows.sortedByDescending { it.retirada }.map { row ->
                 // O app identifica equipamento pela etiqueta; o banco guarda o id.
                 val etiqueta = equipamentosState.items.firstOrNull { it.id == row.equipamentoId }?.etiqueta ?: row.equipamentoId.toString()
-                Emprestimo(row.id.toString(), row.usuarioId, "", listOf(etiqueta), formatarData(row.retirada), row.devolucao?.let { formatarData(it) }, devolvidos = if (row.status == "Devolvido") listOf(etiqueta) else emptyList())
+                Emprestimo(
+                    row.id.toString(),
+                    row.usuarioId ?: "",
+                    "",
+                    listOf(etiqueta),
+                    formatarData(row.retirada),
+                    row.devolucao?.let { formatarData(it) },
+                    devolvidos = if (row.status == "Devolvido") listOf(etiqueta) else emptyList()
+                )
             }
             banco = banco.copy(emprestimos = mapped)
         }
