@@ -14,6 +14,7 @@ import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
+import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -531,6 +532,19 @@ class AuditoriaRepository {
         SupabaseProvider.client
             .from("auditoria")
             .select()
+            .decodeList<kotlinx.serialization.json.JsonObject>()
+
+    /**
+     * Somente leitura: os registros mais recentes primeiro (data_acao), no máximo 1000.
+     * Não existe método de gravar, alterar ou apagar auditoria no app.
+     */
+    suspend fun listarRecentes() =
+        SupabaseProvider.client
+            .from("auditoria")
+            .select {
+                order("data_acao", Order.DESCENDING)
+                limit(1000)
+            }
             .decodeList<kotlinx.serialization.json.JsonObject>()
 }
 

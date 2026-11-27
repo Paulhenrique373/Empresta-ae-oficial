@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -173,6 +174,11 @@ fun GestaoDashboard(
                             Icon(Icons.Default.MoreVert, contentDescription = "Mais opções")
                         }
                         DropdownMenu(expanded = menuAberto, onDismissRequest = { menuAberto = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Histórico e auditoria") },
+                                leadingIcon = { Icon(Icons.Default.History, contentDescription = null) },
+                                onClick = { menuAberto = false; onIr("auditoria") }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Sair da conta") },
                                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
@@ -518,6 +524,8 @@ fun GestaoApp(nome: String, usuarioId: String, onSair: () -> Unit) {
         GestaoOcorrencias(usuarioId = usuarioId, onIr = { tela = it })
     } else if (tela == "relatorios") {
         GestaoRelatorios(usuarioId = usuarioId, onIr = { tela = it })
+    } else if (tela == "auditoria") {
+        GestaoAuditoria(usuarioId = usuarioId, onIr = { tela = it })
     } else {
         GestaoDashboard(nome = nome, usuarioId = usuarioId, onSair = onSair, onIr = { tela = it })
     }
